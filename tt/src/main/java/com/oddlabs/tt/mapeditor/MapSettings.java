@@ -73,6 +73,29 @@ record MapSettings(int size, int terrain, int hills, int trees, int supplies, in
         return METERS_PER_WORLD[size];
     }
 
+    /** Meters of height the generator's 0 to 1 heights are scaled to, per island size (Landscape's table). */
+    float getHeightScale() {
+        return switch (getMetersPerWorld()) {
+            case 256 -> 32f;
+            case 512 -> 48f;
+            case 1024 -> 64f;
+            default -> 56f;
+        };
+    }
+
+    /**
+     * The steepest slope units can walk, as the largest height step between neighbouring cells in 0 to 1 heights,
+     * per island size (Landscape's table).
+     */
+    float getAccessThreshold() {
+        return switch (getMetersPerWorld()) {
+            case 256 -> 0.05f;
+            case 512 -> 0.0375f;
+            case 1024 -> 0.025f;
+            default -> 0.0325f;
+        };
+    }
+
     boolean isArchipelago() {
         return ARCHIPELAGO[size] && Globals.SHIPS_ENABLED;
     }

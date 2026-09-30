@@ -81,13 +81,15 @@ final class MapEditorLoader implements LoadCallback {
         if (edited && ground != null)
             ground.rebuildAll();
         ResourceSnapper snapper = new ResourceSnapper(world);
+        AccessOverlay access = new AccessOverlay(new AccessMap(terrain, settings));
         TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, (x0, y0, x1, y1) -> {
             snapper.snap(x0, y0, x1, y1);
             if (ground != null)
                 ground.heightsChanged(x0, y0, x1, y1);
+            access.heightsChanged();
         });
         MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
-                new CameraState(generator.getFogInfo()), editor, ground, settings, map_name, edited);
+                new CameraState(generator.getFogInfo()), editor, ground, access, settings, map_name, edited);
         Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
         gui_root.pushDelegate(delegate);
         return renderer;

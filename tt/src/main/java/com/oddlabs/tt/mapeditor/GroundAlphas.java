@@ -69,20 +69,9 @@ final class GroundAlphas {
         this.heights = heights;
         this.size = heights.length;
         this.terrain = Landscape.TerrainType.values()[settings.terrain()];
-        // The per island size tables from the Landscape constructor.
         int meters = settings.getMetersPerWorld();
-        this.height_scale = switch (meters) {
-            case 256 -> 32;
-            case 512 -> 48;
-            case 1024 -> 64;
-            default -> 56;
-        };
-        this.access_threshold = switch (meters) {
-            case 256 -> 0.05f;
-            case 512 -> 0.0375f;
-            case 1024 -> 0.025f;
-            default -> 0.0325f;
-        };
+        this.height_scale = settings.getHeightScale();
+        this.access_threshold = settings.getAccessThreshold();
         this.build_threshold = access_threshold / 2f;
         this.vegetation_amount = 0.25f + 0.75f * settings.trees() / (float) MapSettings.SLIDER_MAX;
         this.rel_radius = Math.max(1, size >> 5);

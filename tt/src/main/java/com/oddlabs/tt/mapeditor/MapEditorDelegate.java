@@ -76,6 +76,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     private final @NonNull TerrainEditor editor;
     private final @Nullable GroundTextures ground;
+    private static final float ACCESS_UPDATE_INTERVAL = .25f;
+    private final @NonNull AccessOverlay access;
+    private final @NonNull Label label_access_legend;
+    // Seconds since the playable area overlay last followed a stroke in progress.
+    private float access_timer;
     // Seconds since the ground texture last followed a stroke in progress.
     private float ground_timer;
     // An edit finished and the ground texture should settle, possibly rebuilding the whole island.
@@ -121,7 +126,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
-            @NonNull MapSettings settings, @Nullable String map_name, boolean edited) {
+            @NonNull AccessOverlay access, @NonNull MapSettings settings, @Nullable String map_name, boolean edited) {
         super(gui_root, null);
         this.network = network;
         this.world = world;
@@ -129,6 +134,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.picker = picker;
         this.editor = editor;
         this.ground = ground;
+        this.access = access;
         this.settings = settings;
         this.map_name = map_name;
         this.edited = edited;
@@ -165,6 +171,17 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             view.draw_trees = marked;
             setFocus();
         });
+        label_access_legend = new Label(MapEditor.i18n("access_legend"), Skin.getSkin().getEditFont());
+        CheckBox check_access = new CheckBox(false, MapEditor.i18n("show_access"));
+        check_access.addCheckBoxListener(marked -> {
+            access.setVisible(marked);
+            if (marked)
+                addChild(label_access_legend);
+            else
+                label_access_legend.remove();
+            placeAccessLegend();
+            setFocus();
+        });
         CheckBox check_wireframe = new CheckBox(view.line_mode, MapEditor.i18n("wireframe"));
         check_wireframe.addCheckBoxListener(marked -> {
             view.line_mode = marked;
@@ -184,6 +201,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         toolbar.addChild(label_intensity);
         toolbar.addChild(check_trees);
         toolbar.addChild(check_wireframe);
+        toolbar.addChild(check_access);
         toolbar.addChild(button_undo);
         toolbar.addChild(button_menu);
         toolbar.addChild(label_hint);
@@ -192,7 +210,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         label_intensity.place(label_radius, RIGHT_MID);
         check_trees.place(label_intensity, RIGHT_MID);
         check_wireframe.place(check_trees, RIGHT_MID);
-        button_undo.place(check_wireframe, RIGHT_MID, 20);
+        check_access.place(check_wireframe, RIGHT_MID);
+        button_undo.place(check_access, RIGHT_MID, 20);
         button_menu.place(button_undo, RIGHT_MID);
         label_hint.place(first, BOTTOM_LEFT);
         label_controls.place(label_hint, BOTTOM_LEFT);
@@ -268,6 +287,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     public void displayChangedNotify(int width, int height) {
         super.displayChangedNotify(width, height);
         toolbar.setPos((width - toolbar.getWidth()) / 2, height - toolbar.getHeight());
+        placeAccessLegend();
+    }
+
+    /** Just below the toolbar, centred. */
+    private void placeAccessLegend() {
+        label_access_legend.setPos((getWidth() - label_access_legend.getWidth()) / 2,
+                toolbar.getY() - label_access_legend.getHeight() - 4);
     }
 
     @Override
@@ -288,6 +314,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             paint(t);
         editor.flush();
         updateGround(t);
+        updateAccess(t);
     }
 
     /**
@@ -365,6 +392,15 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         } else if (ground.hasChanges() && ground_timer >= GROUND_UPDATE_INTERVAL) {
             ground_timer = 0f;
             ground.update();
+        }
+    }
+
+    /** Brings the playable area overlay after the heights: now and then while painting, at once otherwise. */
+    private void updateAccess(float t) {
+        access_timer += t;
+        if (access.needsUpdate() && (stroke_sign == 0 || access_timer >= ACCESS_UPDATE_INTERVAL)) {
+            access_timer = 0f;
+            access.update(Renderer.getRenderer().getRenderContext());
         }
     }
 
@@ -530,7 +566,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     @Override
     public void render3D(@NonNull LandscapeRenderer renderer, @NonNull RenderQueues render_queues,
             @NonNull CameraState state, @NonNull MatrixStack model_view, @NonNull MatrixStack projection) {
+        access.render(Renderer.getRenderer().getRenderContext(), renderer, state);
         if (!has_cursor || map_mode || getGUIRoot().getModalDelegate() != null)
+            return;
+        // The water reflection is drawn from a camera mirrored below the sea; the brush has no place in it.
+        if (state.getCurrentZ() < world.getHeightMap().getSeaLevelMeters())
             return;
         try (BrushRenderer.Batch batch = brush_renderer.begin(renderer, model_view, projection)) {
             float r = stroke_sign < 0 ? 1f : .4f;
@@ -611,6 +651,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private void leave() {
         if (ground != null)
             ground.close();
+        access.close();
         Renderer.startMenu(network, getGUIRoot().getGUI());
     }
 
