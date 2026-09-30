@@ -1,0 +1,85 @@
+package com.oddlabs.tt.mapeditor;
+
+import com.oddlabs.matchmaking.Game;
+import com.oddlabs.net.NetworkSelector;
+import com.oddlabs.tt.animation.AnimationManager;
+import com.oddlabs.tt.audio.AudioManager;
+import com.oddlabs.tt.camera.CameraState;
+import com.oddlabs.tt.form.LoadCallback;
+import com.oddlabs.tt.gui.GUIRoot;
+import com.oddlabs.tt.landscape.LandscapeResources;
+import com.oddlabs.tt.landscape.NotificationListener;
+import com.oddlabs.tt.landscape.World;
+import com.oddlabs.tt.landscape.WorldParameters;
+import com.oddlabs.tt.player.Player;
+import com.oddlabs.tt.player.PlayerInfo;
+import com.oddlabs.tt.render.DefaultRenderer;
+import com.oddlabs.tt.render.LandscapeRenderer;
+import com.oddlabs.tt.render.MatrixStack;
+import com.oddlabs.tt.render.Picker;
+import com.oddlabs.tt.render.RenderQueues;
+import com.oddlabs.tt.render.Renderer;
+import com.oddlabs.tt.render.UIRenderer;
+import com.oddlabs.tt.resource.IslandGenerator;
+import com.oddlabs.tt.resource.WorldInfo;
+import com.oddlabs.tt.viewer.Cheat;
+import com.oddlabs.tt.viewer.Selection;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Builds the editor's island behind the progress screen, the same way the main menu builds its backdrop island:
+ * a world with a single idle player and no races loaded, since the editor only shapes terrain.
+ */
+final class MapEditorLoader implements LoadCallback {
+    private final @NonNull NetworkSelector network;
+    private final @NonNull MapSettings settings;
+    private final @Nullable String map_name;
+    private final float @Nullable [] @Nullable [] heights;
+
+    MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings, @Nullable String map_name,
+            float @Nullable [] @Nullable [] heights) {
+        this.network = network;
+        this.settings = settings;
+        this.map_name = map_name;
+        this.heights = heights;
+    }
+
+    @Override
+    public @NonNull UIRenderer load(@NonNull GUIRoot gui_root) {
+        AnimationManager.freezeTime();
+        IslandGenerator generator = settings.createGenerator();
+        PlayerInfo[] players = new PlayerInfo[]{new PlayerInfo(0, 0, "")};
+        WorldParameters world_params = new WorldParameters(Game.GAMESPEED_NORMAL, "", 2,
+                Player.DEFAULT_MAX_UNIT_COUNT);
+        WorldInfo world_info = generator.generate(players.length, world_params.getInitialUnitCount(), 0f);
+        float[][] terrain = world_info.heightmap();
+        boolean edited = heights != null && heights.length == terrain.length;
+        if (edited) {
+            // The height map keeps this array, so saved heights must be in place before the world is built.
+            for (int y = 0; y < terrain.length; y++)
+                System.arraycopy(heights[y], 0, terrain[y], 0, terrain[y].length);
+        }
+
+        RenderQueues render_queues = new RenderQueues();
+        LandscapeResources landscape_resources = World.loadCommon(render_queues);
+        World world = World.newWorld(AudioManager.getManager(), landscape_resources, null, new NotificationListener() {
+        }, world_params, world_info, generator.getTerrainType(), players, generator.getFogInfo());
+        AnimationManager manager = new AnimationManager();
+        LandscapeRenderer landscape_renderer = new LandscapeRenderer(world, world_info, manager);
+        Player local_player = world.getPlayers()[0];
+        Selection selection = new Selection(local_player);
+        Picker picker = new Picker(manager, local_player, gui_root, render_queues, landscape_renderer, selection);
+        // The editor's view toggles (trees, wireframe) are the renderer's cheat switches.
+        Cheat view = new Cheat();
+        UIRenderer renderer = new DefaultRenderer(view, local_player, render_queues, world_info, landscape_renderer,
+                picker, selection, generator, new MatrixStack(), new MatrixStack(), null);
+
+        TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, new ResourceSnapper(world)::snap);
+        MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
+                new CameraState(generator.getFogInfo()), editor, settings, map_name, edited);
+        Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
+        gui_root.pushDelegate(delegate);
+        return renderer;
+    }
+}

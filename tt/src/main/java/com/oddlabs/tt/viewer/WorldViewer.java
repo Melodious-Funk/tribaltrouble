@@ -7,6 +7,7 @@ import com.oddlabs.tt.animation.Animated;
 import com.oddlabs.tt.animation.AnimationManager;
 import com.oddlabs.tt.audio.AudioManager;
 import com.oddlabs.tt.audio.AudioParameters;
+import com.oddlabs.tt.camera.CameraHost;
 import com.oddlabs.tt.camera.CameraState;
 import com.oddlabs.tt.camera.GameCamera;
 import com.oddlabs.tt.camera.SpectatorGameCamera;
@@ -62,7 +63,7 @@ import java.util.List;
 import java.util.ResourceBundle;
 import java.util.stream.Collectors;
 
-public final class WorldViewer implements Animated, AutoCloseable {
+public final class WorldViewer implements Animated, AutoCloseable, CameraHost {
 
     private static final String[] GAMESPEED_STRINGS = new String[]{"paused", "slow", "normal", "fast", "ludicrous"};
 
