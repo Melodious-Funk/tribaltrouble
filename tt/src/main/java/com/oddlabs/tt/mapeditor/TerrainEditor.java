@@ -37,7 +37,7 @@ final class TerrainEditor {
     private static final float FLATTEN_RATE = 15f;
     /** Share of a flatten brush's or a ramp's width that is fully flat, the rest blends into the ground around. */
     private static final float PLATEAU_CORE = 0.6f;
-    private static final int MAX_UNDO_STEPS = 32;
+    static final int MAX_UNDO_STEPS = 32;
 
     private final @NonNull HeightMap height_map;
     private final float @NonNull [] @NonNull [] heights;
@@ -129,11 +129,12 @@ final class TerrainEditor {
         stroke_y1 = Integer.MIN_VALUE;
     }
 
-    void endStroke() {
+    /** @return whether the stroke changed anything, and so left an undo step */
+    boolean endStroke() {
         float[][] backup = stroke_backup;
         stroke_backup = null;
         if (backup == null || stroke_x0 > stroke_x1)
-            return;
+            return false;
         // Only the touched rectangle of the backup is worth keeping.
         int w = stroke_x1 - stroke_x0 + 1;
         int h = stroke_y1 - stroke_y0 + 1;
@@ -143,6 +144,7 @@ final class TerrainEditor {
         undo_steps.push(new UndoStep(stroke_x0, stroke_y0, saved));
         while (undo_steps.size() > MAX_UNDO_STEPS)
             undo_steps.removeLast();
+        return true;
     }
 
     /** Restores the heights from before the last stroke. */

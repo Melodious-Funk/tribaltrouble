@@ -49,6 +49,8 @@ final class GroundAlphas {
     // What trees, rocks and iron do to the lighting: highlight is scaled by the first, shadow raised to the second.
     private final float @NonNull [] @NonNull [] supply_highlight;
     private final float @NonNull [] @NonNull [] supply_shadow;
+    private final int shadow_size;
+    private final @NonNull Channel stamp;
 
     // Whole map caches of the inputs to the island wide ranges.
     private final float @NonNull [] @NonNull [] rel_intensity;
@@ -81,20 +83,16 @@ final class GroundAlphas {
         this.supply_shadow = new float[size][size];
         for (float[] row : supply_highlight)
             java.util.Arrays.fill(row, 1f);
-        // Landscape.placeSupplies: each tree darkens a soft square around it.
-        int shadow_size = switch (meters) {
+        // Landscape.placeSupplies: the size of the soft square a tree darkens around it.
+        this.shadow_size = switch (meters) {
             case 256 -> Math.max(size >> 5, 2);
             case 512 -> Math.max(size >> 6, 2);
             case 1024 -> Math.max(size >> 7, 2);
             default -> Math.max(size >> 8, 2);
         };
-        Channel stamp = new Channel(shadow_size << 1, shadow_size << 1).place(new Channel(shadow_size, shadow_size)
+        this.stamp = new Channel(shadow_size << 1, shadow_size << 1).place(new Channel(shadow_size, shadow_size)
                 .fill(1f), shadow_size >> 1, shadow_size >> 1).smoothFast();
-        stampTrees(trees, stamp, shadow_size, 0.33f);
-        stampTrees(palm_trees, stamp, shadow_size, 0.25f);
-        // Rocks and iron shade their own cell.
-        for (int[] supply : shaded_supplies)
-            supply_shadow[supply[1]][supply[0]] = Math.max(supply_shadow[supply[1]][supply[0]], 0.5f);
+        stampSupplies(trees, palm_trees, shaded_supplies, 0, 0, size - 1, size - 1);
 
         this.rel_intensity = new float[size][size];
         this.light = new float[size][size];
@@ -107,15 +105,51 @@ final class GroundAlphas {
         return size;
     }
 
-    private void stampTrees(@NonNull List<int[]> positions, @NonNull Channel stamp, int shadow_size,
-            float strength) {
+    /** Cells a tree's shadow reaches on either side of it. */
+    int getSupplyShadowReach() {
+        return shadow_size;
+    }
+
+    /**
+     * Redoes what trees, rocks and iron do to the lighting within a rectangle of cells (inclusive), given every
+     * resource whose shadow reaches into it.
+     */
+    void restampSupplies(@NonNull List<int[]> trees, @NonNull List<int[]> palm_trees,
+            @NonNull List<int[]> shaded_supplies, int x0, int y0, int x1, int y1) {
+        x0 = Math.max(0, x0);
+        y0 = Math.max(0, y0);
+        x1 = Math.min(size - 1, x1);
+        y1 = Math.min(size - 1, y1);
+        for (int y = y0; y <= y1; y++) {
+            java.util.Arrays.fill(supply_highlight[y], x0, x1 + 1, 1f);
+            java.util.Arrays.fill(supply_shadow[y], x0, x1 + 1, 0f);
+        }
+        stampSupplies(trees, palm_trees, shaded_supplies, x0, y0, x1, y1);
+    }
+
+    private void stampSupplies(@NonNull List<int[]> trees, @NonNull List<int[]> palm_trees,
+            @NonNull List<int[]> shaded_supplies, int x0, int y0, int x1, int y1) {
+        // Landscape.placeSupplies: each tree darkens a soft square around it.
+        stampTrees(trees, 0.33f, x0, y0, x1, y1);
+        stampTrees(palm_trees, 0.25f, x0, y0, x1, y1);
+        // Rocks and iron shade their own cell.
+        for (int[] supply : shaded_supplies) {
+            if (supply[0] >= x0 && supply[0] <= x1 && supply[1] >= y0 && supply[1] <= y1)
+                supply_shadow[supply[1]][supply[0]] = Math.max(supply_shadow[supply[1]][supply[0]], 0.5f);
+        }
+    }
+
+    /** Stamps tree shadows, wrapping at the map edge as Channel.place does, onto cells within the rectangle. */
+    private void stampTrees(@NonNull List<int[]> positions, float strength, int x0, int y0, int x1, int y1) {
         for (int[] tree : positions) {
-            int x0 = tree[0] - shadow_size + 1;
-            int y0 = tree[1] - shadow_size + 1;
+            int sx = tree[0] - shadow_size + 1;
+            int sy = tree[1] - shadow_size + 1;
             for (int y = 0; y < stamp.getHeight(); y++) {
                 for (int x = 0; x < stamp.getWidth(); x++) {
-                    int mx = Math.floorMod(x0 + x, size);
-                    int my = Math.floorMod(y0 + y, size);
+                    int mx = Math.floorMod(sx + x, size);
+                    int my = Math.floorMod(sy + y, size);
+                    if (mx < x0 || mx > x1 || my < y0 || my > y1)
+                        continue;
                     float alpha = stamp.getPixel(x, y);
                     supply_highlight[my][mx] *= 1f - alpha;
                     supply_shadow[my][mx] = Math.max(supply_shadow[my][mx], alpha * strength);

@@ -27,6 +27,8 @@ import com.oddlabs.tt.viewer.Selection;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
+
 /**
  * Builds the editor's island behind the progress screen, the same way the main menu builds its backdrop island:
  * a world with a single idle player and no races loaded, since the editor only shapes terrain.
@@ -36,13 +38,15 @@ final class MapEditorLoader implements LoadCallback {
     private final @NonNull MapSettings settings;
     private final @Nullable String map_name;
     private final float @Nullable [] @Nullable [] heights;
+    private final MapFile.@Nullable Resources resources;
 
     MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings, @Nullable String map_name,
-            float @Nullable [] @Nullable [] heights) {
+            float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources) {
         this.network = network;
         this.settings = settings;
         this.map_name = map_name;
         this.heights = heights;
+        this.resources = resources;
     }
 
     @Override
@@ -60,6 +64,15 @@ final class MapEditorLoader implements LoadCallback {
             for (int y = 0; y < terrain.length; y++)
                 System.arraycopy(heights[y], 0, terrain[y], 0, terrain[y].length);
         }
+        if (resources != null) {
+            // Saved resources take the generated ones' place before the world plants them.
+            List<List<int[]>> lists = List.of(world_info.trees(), world_info.palm_trees(), world_info.rocks(),
+                    world_info.iron());
+            for (Resource kind : Resource.values()) {
+                lists.get(kind.ordinal()).clear();
+                lists.get(kind.ordinal()).addAll(resources.of(kind));
+            }
+        }
 
         RenderQueues render_queues = new RenderQueues();
         LandscapeResources landscape_resources = World.loadCommon(render_queues);
@@ -76,9 +89,9 @@ final class MapEditorLoader implements LoadCallback {
                 picker, selection, generator, new MatrixStack(), new MatrixStack(), null);
 
         GroundTextures ground = GroundTextures.create(world_info, settings,
-                Renderer.getRenderer().getRenderContext());
-        // The generator baked the ground texture for its own heights, so saved heights need it redone.
-        if (edited && ground != null)
+                Renderer.getRenderer().getRenderContext(), resources == null);
+        // The generator baked the ground texture for its own heights and trees, so saved ones need it redone.
+        if ((edited || resources != null) && ground != null)
             ground.rebuildAll();
         ResourceSnapper snapper = new ResourceSnapper(world);
         AccessOverlay access = new AccessOverlay(new AccessMap(terrain, settings));
@@ -88,8 +101,13 @@ final class MapEditorLoader implements LoadCallback {
                 ground.heightsChanged(x0, y0, x1, y1);
             access.heightsChanged();
         });
+        ResourceLayer layer = new ResourceLayer(world, terrain, settings, (changed, x0, y0, x1, y1) -> {
+            if (ground != null)
+                ground.resourcesChanged(changed, x0, y0, x1, y1);
+        });
         MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
-                new CameraState(generator.getFogInfo()), editor, ground, access, settings, map_name, edited);
+                new CameraState(generator.getFogInfo()), editor, ground, access, layer, settings, map_name, edited,
+                resources != null);
         Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
         gui_root.pushDelegate(delegate);
         return renderer;

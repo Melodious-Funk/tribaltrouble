@@ -20,16 +20,26 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 /**
- * A saved editor map: the generator settings plus, once the terrain has been edited, the whole height map.
+ * A saved editor map: the generator settings plus, once edited, the whole height map and the resources.
  *
- * <p>Maps without heights are regenerated from their settings when loaded. The file is a gzipped stream of the
- * magic, a version, the settings and an optional square grid of heights in meters.
+ * <p>What was never edited is generated again from the settings when the map is loaded. The file is a gzipped
+ * stream of the magic, a version, the settings, whether heights and resources follow, an optional square grid of
+ * heights in meters, and optionally the grid positions of each kind of resource. Version 1 files have no
+ * resources, nor the flag for them.
  */
-record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights) {
+record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
+               @Nullable Resources resources) {
     static final String EXTENSION = ".ttmap";
 
     private static final int MAGIC = 0x54_54_4D_50; // "TTMP"
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
+
+    /** Grid positions of every resource, one list per kind in {@link Resource} order. */
+    record Resources(@NonNull List<int @NonNull []> @NonNull [] positions) {
+        @NonNull List<int @NonNull []> of(@NonNull Resource kind) {
+            return positions[kind.ordinal()];
+        }
+    }
     private static final int MAX_NAME_LENGTH = 48;
 
     /** A saved map as listed in the load dialog, without reading its heights. */
@@ -75,11 +85,22 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                 out.writeInt(VERSION);
                 writeSettings(out, settings);
                 out.writeBoolean(heights != null);
+                out.writeBoolean(resources != null);
                 if (heights != null) {
                     out.writeInt(heights.length);
                     for (float[] row : heights) {
                         for (float height : row) {
                             out.writeFloat(height);
+                        }
+                    }
+                }
+                if (resources != null) {
+                    for (Resource kind : Resource.values()) {
+                        List<int[]> positions = resources.of(kind);
+                        out.writeInt(positions.size());
+                        for (int[] position : positions) {
+                            out.writeShort(position[0]);
+                            out.writeShort(position[1]);
                         }
                     }
                 }
@@ -92,9 +113,12 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
 
     static @NonNull MapFile load(@NonNull Path path) throws IOException {
         try (var in = open(path)) {
+            int version = readVersion(in);
             MapSettings settings = readSettings(in);
+            boolean has_heights = in.readBoolean();
+            boolean has_resources = version >= 2 && in.readBoolean();
             float[][] heights = null;
-            if (in.readBoolean()) {
+            if (has_heights) {
                 int grid_size = in.readInt();
                 if (grid_size != gridSize(settings))
                     throw new IOException("Height map does not fit the island size");
@@ -105,7 +129,27 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                     }
                 }
             }
-            return new MapFile(nameOf(path), settings, heights);
+            Resources resources = null;
+            if (has_resources) {
+                int grid_size = gridSize(settings);
+                @SuppressWarnings("unchecked")
+                List<int[]>[] positions = new List[Resource.values().length];
+                for (int k = 0; k < positions.length; k++) {
+                    int count = in.readInt();
+                    if (count < 0 || count > grid_size * grid_size)
+                        throw new IOException("Bad resource count " + count);
+                    positions[k] = new ArrayList<>(count);
+                    for (int i = 0; i < count; i++) {
+                        int x = in.readShort();
+                        int y = in.readShort();
+                        if (x < 0 || y < 0 || x >= grid_size || y >= grid_size)
+                            throw new IOException("Resource outside the island");
+                        positions[k].add(new int[]{x, y});
+                    }
+                }
+                resources = new Resources(positions);
+            }
+            return new MapFile(nameOf(path), settings, heights, resources);
         }
     }
 
@@ -119,8 +163,11 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                 if (!path.getFileName().toString().endsWith(EXTENSION) || !Files.isRegularFile(path))
                     continue;
                 try (var in = open(path)) {
+                    int version = readVersion(in);
                     MapSettings settings = readSettings(in);
                     boolean edited = in.readBoolean();
+                    if (version >= 2 && in.readBoolean())
+                        edited = true;
                     entries.add(new Entry(nameOf(path), path, settings, edited, Files.getLastModifiedTime(path)));
                 } catch (IOException e) {
                     IO.println("Skipping unreadable map " + path + ": " + e);
@@ -133,14 +180,19 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         return entries;
     }
 
+    /** The version after the magic, if this build can read it. */
+    private static int readVersion(@NonNull DataInputStream in) throws IOException {
+        int version = in.readInt();
+        if (version < 1 || version > VERSION)
+            throw new IOException("Unsupported map version " + version);
+        return version;
+    }
+
     private static @NonNull DataInputStream open(@NonNull Path path) throws IOException {
         var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(path))));
         try {
             if (in.readInt() != MAGIC)
                 throw new IOException("Not a map file");
-            int version = in.readInt();
-            if (version != VERSION)
-                throw new IOException("Unsupported map version " + version);
             return in;
         } catch (IOException e) {
             in.close();

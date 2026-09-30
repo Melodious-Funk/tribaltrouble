@@ -30,6 +30,7 @@ import com.oddlabs.tt.input.InputPhase;
 import com.oddlabs.tt.input.Key;
 import com.oddlabs.tt.landscape.HeightMap;
 import com.oddlabs.tt.landscape.World;
+import com.oddlabs.tt.procedural.Landscape;
 import com.oddlabs.tt.render.LandscapeLocation;
 import com.oddlabs.tt.render.LandscapeRenderer;
 import com.oddlabs.tt.render.MatrixStack;
@@ -42,6 +43,9 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
 import java.util.Random;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
@@ -62,7 +66,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final float MIN_RADIUS = 4f;
     private static final float MAX_RADIUS = 96f;
     private static final float RADIUS_STEP = 1.15f;
-    private static final int MIN_INTENSITY = 5;
+    private static final int MIN_INTENSITY = 0;
+    /** Seconds between resource brush dabs while the button is held. */
+    private static final float RESOURCE_DAB_INTERVAL = .05f;
+    /** Marks a terrain stroke in the undo history; the terrain editor keeps what it changed. */
+    private static final Object TERRAIN_STEP = new Object();
     private static final int MAX_INTENSITY = 100;
     private static final int INTENSITY_STEP = 5;
     private static final int LABEL_WIDTH = 150;
@@ -86,6 +94,14 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // An edit finished and the ground texture should settle, possibly rebuilding the whole island.
     private boolean ground_settle;
     private final @NonNull MapSettings settings;
+    private final @NonNull ResourceLayer layer;
+    // Terrain steps and resource strokes, newest first, so undo takes them back in the order they were made.
+    private final Deque<Object> history = new ArrayDeque<>();
+    private ResourceLayer.@Nullable Stroke resource_stroke;
+    private float resource_timer;
+    // Whether the resources differ from the generated ones, and whether they changed since the last save.
+    private boolean resources_edited;
+    private boolean resources_modified;
     private final @NonNull BrushRenderer brush_renderer = new BrushRenderer();
     private final @NonNull Animated ticker = this::tick;
     private final @NonNull LandscapeLocation location = new LandscapeLocation();
@@ -126,7 +142,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
-            @NonNull AccessOverlay access, @NonNull MapSettings settings, @Nullable String map_name, boolean edited) {
+            @NonNull AccessOverlay access, @NonNull ResourceLayer layer, @NonNull MapSettings settings,
+            @Nullable String map_name, boolean edited, boolean resources_edited) {
         super(gui_root, null);
         this.network = network;
         this.world = world;
@@ -138,6 +155,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.settings = settings;
         this.map_name = map_name;
         this.edited = edited;
+        this.layer = layer;
+        this.resources_edited = resources_edited;
 
         game_camera = new EditorCamera(this, camera_state);
         setCamera(game_camera);
@@ -147,22 +166,36 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
         toolbar = new Toolbar();
         RadioButtonGroup brushes = new RadioButtonGroup();
+        // Terrain brushes lead the first row, resource brushes make a row of their own under them.
+        Landscape.TerrainType terrain = Landscape.TerrainType.values()[settings.terrain()];
         RadioButton first = null;
         RadioButton previous = null;
+        RadioButton first_resource = null;
+        RadioButton previous_resource = null;
         for (Brush b : Brush.values()) {
-            RadioButton button = new RadioButton(b == brush, brushes, b.getName());
+            RadioButton button = new RadioButton(b == brush, brushes, b.getName(terrain));
             button.addMouseClickListener((_, _, _, _) -> {
                 selectBrush(b);
                 setFocus();
             });
             toolbar.addChild(button);
-            if (previous == null) {
-                button.place();
-                first = button;
+            if (b.isResourceBrush()) {
+                if (previous_resource == null) {
+                    button.place(first, BOTTOM_LEFT);
+                    first_resource = button;
+                } else {
+                    button.place(previous_resource, RIGHT_MID);
+                }
+                previous_resource = button;
             } else {
-                button.place(previous, RIGHT_MID);
+                if (previous == null) {
+                    button.place();
+                    first = button;
+                } else {
+                    button.place(previous, RIGHT_MID);
+                }
+                previous = button;
             }
-            previous = button;
         }
         label_radius = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
         label_intensity = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
@@ -213,7 +246,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         check_access.place(check_wireframe, RIGHT_MID);
         button_undo.place(check_access, RIGHT_MID, 20);
         button_menu.place(button_undo, RIGHT_MID);
-        label_hint.place(first, BOTTOM_LEFT);
+        label_hint.place(first_resource, BOTTOM_LEFT);
         label_controls.place(label_hint, BOTTOM_LEFT);
         toolbar.compileCanvas();
         addChild(toolbar);
@@ -375,8 +408,30 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             return;
         }
         stroke_z = editor.getHeight(toGrid(cursor_x), toGrid(cursor_y));
+        if (brush.isResourceBrush()) {
+            resource_stroke = new ResourceLayer.Stroke();
+            // The first dab lands at once.
+            resource_timer = RESOURCE_DAB_INTERVAL;
+            return;
+        }
         random_seed = random.nextInt();
         editor.beginStroke();
+    }
+
+    private void remember(@NonNull Object step) {
+        history.push(step);
+        while (history.size() > TerrainEditor.MAX_UNDO_STEPS)
+            history.removeLast();
+    }
+
+    private void finishResourceStroke() {
+        ResourceLayer.Stroke stroke = resource_stroke;
+        resource_stroke = null;
+        if (stroke != null && !stroke.isEmpty()) {
+            remember(stroke);
+            resources_edited = true;
+            resources_modified = true;
+        }
     }
 
     /**
@@ -408,7 +463,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (stroke_sign == 0)
             return;
         ground_settle = true;
-        if (brush.isDragShape()) {
+        if (brush.isResourceBrush()) {
+            finishResourceStroke();
+        } else if (brush.isDragShape()) {
             if (has_cursor) {
                 float ax = toGrid(ramp_x);
                 float ay = toGrid(ramp_y);
@@ -417,24 +474,43 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 editor.beginStroke();
                 editor.applyRamp(ax, ay, editor.getHeight(ax, ay), bx, by, editor.getHeight(bx, by), toGrid(radius),
                         intensity / 100f, stroke_sign);
-                editor.endStroke();
+                if (editor.endStroke())
+                    remember(TERRAIN_STEP);
             }
-        } else {
-            editor.endStroke();
+        } else if (editor.endStroke()) {
+            remember(TERRAIN_STEP);
         }
         stroke_sign = 0;
     }
 
     /** Drops a stroke without laying a pending ramp, keeping whatever was already painted as one undo step. */
     private void cancelStroke() {
-        if (stroke_sign != 0 && !brush.isDragShape()) {
-            editor.endStroke();
+        if (stroke_sign != 0 && brush.isResourceBrush()) {
+            finishResourceStroke();
+            ground_settle = true;
+        } else if (stroke_sign != 0 && !brush.isDragShape()) {
+            if (editor.endStroke())
+                remember(TERRAIN_STEP);
             ground_settle = true;
         }
         stroke_sign = 0;
     }
 
     private void paint(float t) {
+        if (brush.isResourceBrush()) {
+            Resource resource = brush.getResource();
+            // Dabs rather than every frame: each fills the brush to its density, so more would only cost time.
+            resource_timer += t;
+            if (resource_timer < RESOURCE_DAB_INTERVAL || resource_stroke == null)
+                return;
+            resource_timer = 0f;
+            // Right click takes away what the brush paints; the eraser takes away everything with either button.
+            if (resource != null && stroke_sign > 0)
+                layer.paint(resource, cursor_x, cursor_y, radius, intensity / 100f, resource_stroke);
+            else
+                layer.erase(resource, cursor_x, cursor_y, radius, resource_stroke);
+            return;
+        }
         float gx = toGrid(cursor_x);
         float gy = toGrid(cursor_y);
         float r = toGrid(radius);
@@ -444,7 +520,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             case FLATTEN -> editor.applyFlatten(gx, gy, r, strength, stroke_sign, t, stroke_z);
             case SMOOTH -> editor.applySmooth(gx, gy, r, strength, stroke_sign, t);
             case RANDOM -> editor.applyRandom(gx, gy, r, strength, stroke_sign, t, random_seed);
-            case RAMP -> {
+            default -> {
             }
         }
     }
@@ -452,8 +528,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private void undo() {
         cancelStroke();
         ground_settle = true;
-        if (!editor.undo())
+        Object step = history.poll();
+        if (step instanceof ResourceLayer.Stroke stroke) {
+            layer.undo(stroke);
+            resources_modified = true;
+        } else if (step == null || !editor.undo()) {
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("nothing_to_undo"));
+        }
     }
 
     // ---- Mouse and keys ----
@@ -627,8 +708,16 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
         getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), dir, map_name != null ? map_name : "", name -> {
             boolean keep_heights = edited || editor.isModified();
+            MapFile.Resources resources = null;
+            if (resources_edited) {
+                @SuppressWarnings("unchecked")
+                List<int[]>[] positions = new List[Resource.values().length];
+                for (Resource kind : Resource.values())
+                    positions[kind.ordinal()] = layer.positions(kind);
+                resources = new MapFile.Resources(positions);
+            }
             try {
-                new MapFile(name, settings, keep_heights ? editor.copyHeights() : null).save(dir);
+                new MapFile(name, settings, keep_heights ? editor.copyHeights() : null, resources).save(dir);
             } catch (IOException e) {
                 getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("save_failed", e.getMessage())));
                 return;
@@ -636,12 +725,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             map_name = name;
             edited = keep_heights;
             editor.markSaved();
+            resources_modified = false;
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("saved", name));
         }));
     }
 
     private void exit() {
-        if (editor.isModified()) {
+        if (editor.isModified() || resources_modified) {
             getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("exit_confirm"), (_, _, _, _) -> leave()));
         } else {
             leave();

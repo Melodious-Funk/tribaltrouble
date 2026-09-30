@@ -56,9 +56,10 @@ public final class MapEditorForm extends Form {
     private final @NonNull HorizButton button_start;
 
     private @NonNull MapSettings settings;
-    // The saved map the settings came from, and its edited heights if it has any.
+    // The saved map the settings came from, and its edited heights and resources if it has them.
     private @Nullable String map_name;
     private float @Nullable [] @Nullable [] heights;
+    private MapFile.@Nullable Resources resources;
     private boolean applying;
 
     public MapEditorForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root) {
@@ -215,9 +216,10 @@ public final class MapEditorForm extends Form {
         if (applying || new_settings.equals(settings))
             return;
         settings = new_settings;
-        if (heights != null) {
-            // Edited heights only fit the island they were made on, so this is a new map now.
+        if (heights != null || resources != null) {
+            // Edits only fit the island they were made on, so this is a new map now.
             heights = null;
+            resources = null;
             map_name = null;
         }
         refresh();
@@ -228,6 +230,7 @@ public final class MapEditorForm extends Form {
         if (parsed == null)
             return false;
         heights = null;
+        resources = null;
         map_name = null;
         showSettings(parsed);
         return true;
@@ -269,7 +272,7 @@ public final class MapEditorForm extends Form {
             return;
         gui_root.addModalForm(new SaveMapDialog(gui_root, dir, map_name != null ? map_name : "", name -> {
             try {
-                new MapFile(name, settings, heights).save(dir);
+                new MapFile(name, settings, heights, resources).save(dir);
                 map_name = name;
                 refresh();
                 gui_root.getInfoPrinter().print(MapEditor.i18n("saved", name));
@@ -292,6 +295,7 @@ public final class MapEditorForm extends Form {
                 return;
             }
             heights = map.heights();
+            resources = map.resources();
             map_name = map.name();
             showSettings(map.settings());
         }));
@@ -300,6 +304,6 @@ public final class MapEditorForm extends Form {
     private void start() {
         button_start.setDisabled(true);
         ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, settings, map_name,
-                heights));
+                heights, resources));
     }
 }

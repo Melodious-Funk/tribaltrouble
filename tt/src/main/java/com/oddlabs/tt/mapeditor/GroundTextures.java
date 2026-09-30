@@ -122,6 +122,8 @@ final class GroundTextures implements AutoCloseable {
     private final int mip_draw_fbo = GL30.glGenFramebuffers();
 
     private boolean closed;
+    // Generated rocks and iron the generator left without a shadow, by cell.
+    private final boolean @NonNull [] unshaded;
 
     // Heights changed since the last update (inclusive), in cells.
     private int dirty_x0 = Integer.MAX_VALUE;
@@ -130,11 +132,13 @@ final class GroundTextures implements AutoCloseable {
     private int dirty_y1 = Integer.MIN_VALUE;
 
     /**
+     * @param generated_supplies whether the trees, rocks and iron are the ones the generator placed, rather than
+     * saved ones put in their place
      * @return the updater, or null when the island's blend layers are not laid out as expected, in which case the
      * ground texture simply stays as generated
      */
     static @Nullable GroundTextures create(@NonNull WorldInfo world_info, @NonNull MapSettings settings,
-            @NonNull RenderContext context) {
+            @NonNull RenderContext context, boolean generated_supplies) {
         BlendInfo[] blends = world_info.blend_infos();
         boolean expected = blends.length == NUM_BLENDS;
         for (int i = 0; expected && i < NUM_BLENDS; i++)
@@ -143,14 +147,25 @@ final class GroundTextures implements AutoCloseable {
             logger.warning("Unexpected ground blend layers; edited ground keeps its generated texture");
             return null;
         }
-        return new GroundTextures(world_info, settings, context);
+        return new GroundTextures(world_info, settings, context, generated_supplies);
     }
 
     private GroundTextures(@NonNull WorldInfo world_info, @NonNull MapSettings settings,
-            @NonNull RenderContext context) {
+            @NonNull RenderContext context, boolean generated_supplies) {
         this.context = context;
+        int grid_size = world_info.heightmap().length;
+        this.unshaded = new boolean[grid_size * grid_size];
+        List<int[]> shaded = new ArrayList<>();
+        for (List<int[]> supplies : List.of(world_info.rocks(), world_info.iron())) {
+            for (int[] supply : supplies) {
+                if (!generated_supplies || castsShadow(world_info, supply))
+                    shaded.add(supply);
+                else
+                    unshaded[supply[1] * grid_size + supply[0]] = true;
+            }
+        }
         this.alphas = new GroundAlphas(world_info.heightmap(), settings, world_info.trees(), world_info.palm_trees(),
-                shadedSupplies(world_info));
+                shaded);
         this.size = alphas.getSize();
         this.colormap_size = world_info.texels_per_colormap();
         this.texels_per_cell = colormap_size / size;
@@ -181,19 +196,12 @@ final class GroundTextures implements AutoCloseable {
     }
 
     /**
-     * The rocks and iron that shade their cell. The generator adds a few near the start position after drawing
-     * supply shadows, so those have none; a shaded cell reads at least half in the generated shadow map.
+     * Whether a generated rock or iron shades its cell. The generator adds a few near the start position after
+     * drawing supply shadows, so those have none; a shaded cell reads at least half in the generated shadow map.
      */
-    private static @NonNull List<int[]> shadedSupplies(@NonNull WorldInfo world_info) {
+    private static boolean castsShadow(@NonNull WorldInfo world_info, int @NonNull [] supply) {
         GLByteImage generated_shadow = world_info.blend_infos()[SHADOW_BLEND].getSourceImage();
-        List<int[]> shaded = new ArrayList<>();
-        for (List<int[]> supplies : List.of(world_info.rocks(), world_info.iron())) {
-            for (int[] supply : supplies) {
-                if (generated_shadow.getPixel(supply[0], supply[1]) >= 128)
-                    shaded.add(supply);
-            }
-        }
-        return shaded;
+        return generated_shadow.getPixel(supply[0], supply[1]) >= 128;
     }
 
     private @NonNull Texture newAlphaTexture() {
@@ -203,6 +211,35 @@ final class GroundTextures implements AutoCloseable {
     /** Notes changed heights (inclusive rectangle, in cells); the texture follows on the next {@link #update}. */
     void heightsChanged(int x0, int y0, int x1, int y1) {
         alphas.heightsChanged(x0, y0, x1, y1);
+        markDirty(x0, y0, x1, y1);
+    }
+
+    /**
+     * Notes resources that came or went (inclusive rectangle, in cells): trees shade the ground around them, and
+     * rocks and iron their own cell. The texture follows on the next {@link #update}.
+     */
+    void resourcesChanged(@NonNull ResourceLayer layer, int x0, int y0, int x1, int y1) {
+        int reach = alphas.getSupplyShadowReach();
+        int sx0 = x0 - reach;
+        int sy0 = y0 - reach;
+        int sx1 = x1 + reach;
+        int sy1 = y1 + reach;
+        List<int[]> shaded = new ArrayList<>();
+        for (Resource kind : new Resource[]{Resource.ROCK, Resource.IRON})
+            shaded.addAll(layer.positionsIn(kind, sx0, sy0, sx1, sy1));
+        // Only generated rocks still where they were keep going without a shadow.
+        shaded.removeIf(supply -> unshaded[supply[1] * size + supply[0]]);
+        for (int y = Math.max(0, y0); y <= Math.min(size - 1, y1); y++)
+            for (int x = Math.max(0, x0); x <= Math.min(size - 1, x1); x++)
+                if (layer.get(x, y) != Resource.ROCK && layer.get(x, y) != Resource.IRON)
+                    unshaded[y * size + x] = false;
+        alphas.restampSupplies(layer.positionsIn(Resource.TREE, sx0 - reach, sy0 - reach, sx1 + reach, sy1 + reach),
+                layer.positionsIn(Resource.PALM, sx0 - reach, sy0 - reach, sx1 + reach, sy1 + reach), shaded, sx0,
+                sy0, sx1, sy1);
+        markDirty(sx0, sy0, sx1, sy1);
+    }
+
+    private void markDirty(int x0, int y0, int x1, int y1) {
         dirty_x0 = Math.min(dirty_x0, x0);
         dirty_y0 = Math.min(dirty_y0, y0);
         dirty_x1 = Math.max(dirty_x1, x1);
