@@ -107,6 +107,11 @@ public final class FirstPersonCamera extends Camera {
         checkPosition();
     }
 
+    @Override
+    protected float getMaxZ() {
+        return viewer.getMaxCameraZ();
+    }
+
     /** @return true if a text field or modal window has keyboard focus, so camera keys should be ignored. */
     private boolean isKeyboardBlocked() {
         return viewer.getGUIRoot().getDelegate().keyboardBlocked() || viewer.getGUIRoot().getModalDelegate() != null;

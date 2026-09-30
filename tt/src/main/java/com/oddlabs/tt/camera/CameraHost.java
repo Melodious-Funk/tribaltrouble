@@ -12,4 +12,9 @@ public interface CameraHost {
     @NonNull GUIRoot getGUIRoot();
 
     @NonNull Picker getPicker();
+
+    /** The highest the view may climb, which the first person view keeps to as well. */
+    default float getMaxCameraZ() {
+        return GameCamera.MAX_Z;
+    }
 }

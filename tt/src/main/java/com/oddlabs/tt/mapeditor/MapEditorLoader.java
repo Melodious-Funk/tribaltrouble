@@ -75,9 +75,19 @@ final class MapEditorLoader implements LoadCallback {
         UIRenderer renderer = new DefaultRenderer(view, local_player, render_queues, world_info, landscape_renderer,
                 picker, selection, generator, new MatrixStack(), new MatrixStack(), null);
 
-        TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, new ResourceSnapper(world)::snap);
+        GroundTextures ground = GroundTextures.create(world_info, settings,
+                Renderer.getRenderer().getRenderContext());
+        // The generator baked the ground texture for its own heights, so saved heights need it redone.
+        if (edited && ground != null)
+            ground.rebuildAll();
+        ResourceSnapper snapper = new ResourceSnapper(world);
+        TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, (x0, y0, x1, y1) -> {
+            snapper.snap(x0, y0, x1, y1);
+            if (ground != null)
+                ground.heightsChanged(x0, y0, x1, y1);
+        });
         MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
-                new CameraState(generator.getFogInfo()), editor, settings, map_name, edited);
+                new CameraState(generator.getFogInfo()), editor, ground, settings, map_name, edited);
         Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
         gui_root.pushDelegate(delegate);
         return renderer;

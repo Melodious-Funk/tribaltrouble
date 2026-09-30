@@ -3,10 +3,13 @@ package com.oddlabs.tt.mapeditor;
 import com.oddlabs.net.NetworkSelector;
 import com.oddlabs.tt.animation.Animated;
 import com.oddlabs.tt.animation.AnimationManager;
+import com.oddlabs.tt.camera.Camera;
 import com.oddlabs.tt.camera.CameraHost;
 import com.oddlabs.tt.camera.CameraState;
 import com.oddlabs.tt.camera.FirstPersonCamera;
 import com.oddlabs.tt.camera.GameCamera;
+import com.oddlabs.tt.camera.MapCamera;
+import com.oddlabs.tt.camera.MapCameraOwner;
 import com.oddlabs.tt.delegate.CameraDelegate;
 import com.oddlabs.tt.event.LocalEventQueue;
 import com.oddlabs.tt.form.MessageForm;
@@ -51,8 +54,11 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
  * <p>Left button paints with the positive side of a brush and right button with the negative side. Ctrl plus the
  * wheel sizes the brush, Shift plus the wheel sets its intensity, and the plain wheel zooms like in a game. The
  * middle button turns the view, as it does in a game.
+ *
+ * <p>The map mode key (Space by default) flies up to the game's island overview. Another press of it flies back, and
+ * a left click flies down to the clicked spot. Nothing else works while there.
  */
-final class MapEditorDelegate extends CameraDelegate<GameCamera> implements CameraHost {
+final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHost, MapCameraOwner {
     private static final float MIN_RADIUS = 4f;
     private static final float MAX_RADIUS = 96f;
     private static final float RADIUS_STEP = 1.15f;
@@ -66,13 +72,21 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
     private final @NonNull World world;
     private final @NonNull AnimationManager manager;
     private final @NonNull Picker picker;
+    private static final float GROUND_UPDATE_INTERVAL = .1f;
+
     private final @NonNull TerrainEditor editor;
+    private final @Nullable GroundTextures ground;
+    // Seconds since the ground texture last followed a stroke in progress.
+    private float ground_timer;
+    // An edit finished and the ground texture should settle, possibly rebuilding the whole island.
+    private boolean ground_settle;
     private final @NonNull MapSettings settings;
     private final @NonNull BrushRenderer brush_renderer = new BrushRenderer();
     private final @NonNull Animated ticker = this::tick;
     private final @NonNull LandscapeLocation location = new LandscapeLocation();
     private final @NonNull Random random = new Random(LocalEventQueue.getQueue().getHighPrecisionManager().getTick());
 
+    private final @NonNull EditorCamera game_camera;
     private final @NonNull Toolbar toolbar;
     private final @NonNull Label label_radius;
     private final @NonNull Label label_intensity;
@@ -99,28 +113,31 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
     private float ramp_x;
     private float ramp_y;
 
+    private boolean map_mode;
+
     // The middle button view turn in progress. Drags and the release keep arriving here, like in a game.
     private @Nullable LookDelegate look;
 
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
-            @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @NonNull MapSettings settings,
-            @Nullable String map_name, boolean edited) {
+            @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
+            @NonNull MapSettings settings, @Nullable String map_name, boolean edited) {
         super(gui_root, null);
         this.network = network;
         this.world = world;
         this.manager = manager;
         this.picker = picker;
         this.editor = editor;
+        this.ground = ground;
         this.settings = settings;
         this.map_name = map_name;
         this.edited = edited;
 
-        GameCamera camera = new GameCamera(this, camera_state);
-        setCamera(camera);
+        game_camera = new EditorCamera(this, camera_state);
+        setCamera(game_camera);
         // Start south of the middle, looking north over the island.
         float center = world.getHeightMap().getMetersPerWorld() / 2f;
-        camera.reset(center, center * .75f);
+        game_camera.reset(center, center * .75f);
 
         toolbar = new Toolbar();
         RadioButtonGroup brushes = new RadioButtonGroup();
@@ -128,7 +145,10 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
         RadioButton previous = null;
         for (Brush b : Brush.values()) {
             RadioButton button = new RadioButton(b == brush, brushes, b.getName());
-            button.addMouseClickListener((_, _, _, _) -> selectBrush(b));
+            button.addMouseClickListener((_, _, _, _) -> {
+                selectBrush(b);
+                setFocus();
+            });
             toolbar.addChild(button);
             if (previous == null) {
                 button.place();
@@ -141,11 +161,20 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
         label_radius = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
         label_intensity = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
         CheckBox check_trees = new CheckBox(view.draw_trees, MapEditor.i18n("show_trees"));
-        check_trees.addCheckBoxListener(marked -> view.draw_trees = marked);
+        check_trees.addCheckBoxListener(marked -> {
+            view.draw_trees = marked;
+            setFocus();
+        });
         CheckBox check_wireframe = new CheckBox(view.line_mode, MapEditor.i18n("wireframe"));
-        check_wireframe.addCheckBoxListener(marked -> view.line_mode = marked);
+        check_wireframe.addCheckBoxListener(marked -> {
+            view.line_mode = marked;
+            setFocus();
+        });
         HorizButton button_undo = new HorizButton(MapEditor.i18n("undo"), 80);
-        button_undo.addMouseClickListener((_, _, _, _) -> undo());
+        button_undo.addMouseClickListener((_, _, _, _) -> {
+            undo();
+            setFocus();
+        });
         HorizButton button_menu = new HorizButton(MapEditor.i18n("menu"), 80);
         button_menu.addMouseClickListener((_, _, _, _) -> openMenu());
         label_hint = new Label("", Skin.getSkin().getEditFont(), HINT_WIDTH);
@@ -173,6 +202,27 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
         refreshLabels();
     }
 
+    /**
+     * The game camera, able to zoom out twice as far as in a game (200 m instead of 100 m) so more of the island
+     * fits in view while editing. The unlocked cinematic camera still goes higher.
+     */
+    private static final class EditorCamera extends GameCamera {
+        private static final float EDITOR_MAX_Z = 2 * GameCamera.MAX_Z;
+
+        EditorCamera(@NonNull CameraHost host, @NonNull CameraState state) {
+            super(host, state);
+        }
+
+        @Override
+        protected float getMaxZ() {
+            return Math.max(EDITOR_MAX_Z, super.getMaxZ());
+        }
+
+        float maxZ() {
+            return getMaxZ();
+        }
+    }
+
     /** The toolbar looks like a window but Escape on it opens the editor menu instead of closing it. */
     private final class Toolbar extends Form {
         @Override
@@ -191,6 +241,12 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
     @Override
     public @NonNull Picker getPicker() {
         return picker;
+    }
+
+    /** The editor camera's ceiling, so turning the view or jumping from map mode keeps the zoom. */
+    @Override
+    public float getMaxCameraZ() {
+        return game_camera.maxZ();
     }
 
     // ---- Lifecycle ----
@@ -219,18 +275,19 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
         // Keep edge scrolling in step with the cursor, as the game's camera delegates do.
         var input = Renderer.getLocalInput();
         float scale = getGUIRoot().getGlobalScale();
-        getCamera().mouseMoved(Math.round(input.getMouseX() / scale), Math.round(input.getMouseY() / scale));
-        return getGUIRoot().getModalDelegate() == null;
+        game_camera.mouseMoved(Math.round(input.getMouseX() / scale), Math.round(input.getMouseY() / scale));
+        return !map_mode && getGUIRoot().getModalDelegate() == null;
     }
 
     /** Runs every frame: the world's animations, painting while a button is held, and pushing edits to the GPU. */
     private void tick(float t) {
         world.tick(t);
         manager.runAnimations(t);
-        has_cursor = pickCursor();
+        has_cursor = !map_mode && pickCursor();
         if (stroke_sign != 0 && has_cursor && !brush.isDragShape())
             paint(t);
         editor.flush();
+        updateGround(t);
     }
 
     /**
@@ -240,13 +297,13 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
      * the mouse or the camera does.
      */
     private boolean pickCursor() {
-        if (!picker.pickLocation(getCamera().getState(), location))
+        if (!picker.pickLocation(game_camera.getState(), location))
             return false;
         cursor_x = location.x;
         cursor_y = location.y;
         if (stroke_sign == 0 || brush.isDragShape())
             return true;
-        CameraState state = getCamera().getState();
+        CameraState state = game_camera.getState();
         float eye_x = state.getCurrentX();
         float eye_y = state.getCurrentY();
         float eye_z = state.getCurrentZ();
@@ -295,9 +352,26 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
         editor.beginStroke();
     }
 
+    /**
+     * Brings the ground texture after the heights: every so often while painting, and in full once an edit is done.
+     */
+    private void updateGround(float t) {
+        if (ground == null)
+            return;
+        ground_timer += t;
+        if (stroke_sign == 0 && ground_settle) {
+            ground_settle = false;
+            ground.settle();
+        } else if (ground.hasChanges() && ground_timer >= GROUND_UPDATE_INTERVAL) {
+            ground_timer = 0f;
+            ground.update();
+        }
+    }
+
     private void endStroke() {
         if (stroke_sign == 0)
             return;
+        ground_settle = true;
         if (brush.isDragShape()) {
             if (has_cursor) {
                 float ax = toGrid(ramp_x);
@@ -317,8 +391,10 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
 
     /** Drops a stroke without laying a pending ramp, keeping whatever was already painted as one undo step. */
     private void cancelStroke() {
-        if (stroke_sign != 0 && !brush.isDragShape())
+        if (stroke_sign != 0 && !brush.isDragShape()) {
             editor.endStroke();
+            ground_settle = true;
+        }
         stroke_sign = 0;
     }
 
@@ -339,6 +415,7 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
 
     private void undo() {
         cancelStroke();
+        ground_settle = true;
         if (!editor.undo())
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("nothing_to_undo"));
     }
@@ -352,7 +429,7 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
 
     @Override
     public void mousePressed(@NonNull MouseButton button, int x, int y) {
-        if (isOverToolbar(x, y))
+        if (map_mode || isOverToolbar(x, y))
             return;
         switch (button) {
             case LEFT -> beginStroke(1);
@@ -367,6 +444,12 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
 
     @Override
     public void mouseReleased(@NonNull MouseButton button, int x, int y) {
+        if (map_mode) {
+            // Clicking the overview flies down to that spot, as in a game.
+            if (button == MouseButton.LEFT && getCamera() instanceof MapCamera map_camera)
+                picker.pickMapGoto(x, y, map_camera);
+            return;
+        }
         if (button == MouseButton.MIDDLE && look != null) {
             look.pop();
             look = null;
@@ -377,7 +460,7 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
 
     @Override
     public void mouseMoved(int x, int y) {
-        getCamera().mouseMoved(x, y);
+        game_camera.mouseMoved(x, y);
     }
 
     @Override
@@ -387,11 +470,13 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
             look.getCamera().mouseMoved(x, y);
             return;
         }
-        getCamera().mouseMoved(x, y);
+        game_camera.mouseMoved(x, y);
     }
 
     @Override
     public void mouseScrolled(int amount) {
+        if (map_mode)
+            return;
         // The per key state, since on some platforms the modifier flags stay set after the key is let go.
         var input = Renderer.getLocalInput();
         int steps = Integer.signum(amount);
@@ -402,13 +487,30 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
             intensity = Math.clamp(intensity + steps * INTENSITY_STEP, MIN_INTENSITY, MAX_INTENSITY);
             refreshLabels();
         } else {
-            getCamera().mouseScrolled(amount);
+            game_camera.mouseScrolled(amount);
         }
     }
 
     @Override
     public void handleInput(@NonNull InputEvent event) {
-        if (event.getPhase() == InputPhase.PRESSED) {
+        // Space is also the activate key, which would otherwise click the editor like a left button.
+        event.consumeAction(GameAction.UI_ACTIVATE);
+        if (event.hasAction(GameAction.CAMERA_MAP_MODE)) {
+            // Only a fresh press toggles map mode; holding the key must not flip it back and forth.
+            if (event.getPhase() == InputPhase.PRESSED && !map_mode) {
+                event.consumeAction(GameAction.CAMERA_MAP_MODE);
+                enterMapMode();
+                event.consume();
+                return;
+            }
+            if (event.getPhase() != InputPhase.PRESSED) {
+                event.consumeAction(GameAction.CAMERA_MAP_MODE);
+                event.consume();
+                return;
+            }
+            // A press while in map mode is the map camera's to handle: it flies back.
+        }
+        if (event.getPhase() == InputPhase.PRESSED && !map_mode) {
             if (event.isControlDown() && event.getKeyCode() == Key.Z) {
                 undo();
                 event.consume();
@@ -428,7 +530,7 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
     @Override
     public void render3D(@NonNull LandscapeRenderer renderer, @NonNull RenderQueues render_queues,
             @NonNull CameraState state, @NonNull MatrixStack model_view, @NonNull MatrixStack projection) {
-        if (!has_cursor || getGUIRoot().getModalDelegate() != null)
+        if (!has_cursor || map_mode || getGUIRoot().getModalDelegate() != null)
             return;
         try (BrushRenderer.Batch batch = brush_renderer.begin(renderer, model_view, projection)) {
             float r = stroke_sign < 0 ? 1f : .4f;
@@ -445,8 +547,34 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
 
     // ---- Menu, saving and leaving ----
 
+    // ---- Map mode ----
+
+    private void enterMapMode() {
+        cancelStroke();
+        map_mode = true;
+        has_cursor = false;
+        toolbar.remove();
+        setFocus();
+        game_camera.disable();
+        setCamera(new MapCamera(this, game_camera));
+        getCamera().enable();
+    }
+
+    @Override
+    public void exitMapMode() {
+        map_mode = false;
+        getCamera().disable();
+        // Land exactly where map mode started instead of easing in from the overview.
+        game_camera.getState().snapToTarget();
+        setCamera(game_camera);
+        game_camera.enable();
+        addChild(toolbar);
+    }
+
     private void openMenu() {
         cancelStroke();
+        // Keep the keyboard on the editor once the menu closes, not on a toolbar button.
+        setFocus();
         if (getGUIRoot().getModalDelegate() == null)
             getGUIRoot().addModalForm(new EditorMenu(this::save, this::exit));
     }
@@ -474,18 +602,23 @@ final class MapEditorDelegate extends CameraDelegate<GameCamera> implements Came
 
     private void exit() {
         if (editor.isModified()) {
-            getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("exit_confirm"),
-                    (_, _, _, _) -> Renderer.startMenu(network, getGUIRoot().getGUI())));
+            getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("exit_confirm"), (_, _, _, _) -> leave()));
         } else {
-            Renderer.startMenu(network, getGUIRoot().getGUI());
+            leave();
         }
+    }
+
+    private void leave() {
+        if (ground != null)
+            ground.close();
+        Renderer.startMenu(network, getGUIRoot().getGUI());
     }
 
     /** Turns the view with the game's first person camera while the middle button is held. */
     private final class LookDelegate extends CameraDelegate<FirstPersonCamera> {
         LookDelegate() {
             super(MapEditorDelegate.this.getGUIRoot(), new FirstPersonCamera(MapEditorDelegate.this,
-                    world.getHeightMap(), MapEditorDelegate.this.getCamera().getState()));
+                    world.getHeightMap(), game_camera.getState()));
         }
 
         @Override
