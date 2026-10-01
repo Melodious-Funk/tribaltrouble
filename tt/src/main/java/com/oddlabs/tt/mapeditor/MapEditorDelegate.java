@@ -18,9 +18,13 @@ import com.oddlabs.tt.gui.CheckBox;
 import com.oddlabs.tt.gui.CursorType;
 import com.oddlabs.tt.gui.Form;
 import com.oddlabs.tt.gui.GUIRoot;
+import com.oddlabs.tt.gui.Group;
 import com.oddlabs.tt.gui.HorizButton;
 import com.oddlabs.tt.gui.Label;
 import com.oddlabs.tt.gui.MouseButton;
+import com.oddlabs.tt.gui.PulldownButton;
+import com.oddlabs.tt.gui.PulldownItem;
+import com.oddlabs.tt.gui.PulldownMenu;
 import com.oddlabs.tt.gui.RadioButton;
 import com.oddlabs.tt.gui.RadioButtonGroup;
 import com.oddlabs.tt.gui.Skin;
@@ -46,14 +50,15 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
 import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
 
 /**
- * The editor screen: the island seen through the game camera, a brush toolbar along the top, and the mouse
- * painting the terrain.
+ * The editor screen: the island seen through the game camera, a toolbar along the top with a dropdown each for
+ * terrain and resource brushes, and the mouse painting the terrain.
  *
  * <p>Left button paints with the positive side of a brush and right button with the negative side. Ctrl plus the
  * wheel sizes the brush, Shift plus the wheel sets its intensity, and the plain wheel zooms like in a game. The
@@ -74,6 +79,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final int MAX_INTENSITY = 100;
     private static final int INTENSITY_STEP = 5;
     private static final int LABEL_WIDTH = 150;
+    private static final int PULLDOWN_WIDTH = 150;
     private static final int HINT_WIDTH = 760;
 
     private final @NonNull NetworkSelector network;
@@ -165,38 +171,43 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         game_camera.reset(center, center * .75f);
 
         toolbar = new Toolbar();
-        RadioButtonGroup brushes = new RadioButtonGroup();
-        // Terrain brushes lead the first row, resource brushes make a row of their own under them.
+        // One dropdown of terrain brushes and one of resource brushes, each with a button beside it that picks
+        // whichever brush its dropdown shows.
         Landscape.TerrainType terrain = Landscape.TerrainType.values()[settings.terrain()];
-        RadioButton first = null;
-        RadioButton previous = null;
-        RadioButton first_resource = null;
-        RadioButton previous_resource = null;
-        for (Brush b : Brush.values()) {
-            RadioButton button = new RadioButton(b == brush, brushes, b.getName(terrain));
-            button.addMouseClickListener((_, _, _, _) -> {
-                selectBrush(b);
-                setFocus();
-            });
-            toolbar.addChild(button);
-            if (b.isResourceBrush()) {
-                if (previous_resource == null) {
-                    button.place(first, BOTTOM_LEFT);
-                    first_resource = button;
-                } else {
-                    button.place(previous_resource, RIGHT_MID);
-                }
-                previous_resource = button;
-            } else {
-                if (previous == null) {
-                    button.place();
-                    first = button;
-                } else {
-                    button.place(previous, RIGHT_MID);
-                }
-                previous = button;
-            }
-        }
+        PulldownMenu<Brush> menu_terrain = new PulldownMenu<>();
+        PulldownMenu<Brush> menu_resource = new PulldownMenu<>();
+        for (Brush b : Brush.values())
+            (b.isResourceBrush() ? menu_resource : menu_terrain).addItem(new PulldownItem<>(b.getName(terrain), b));
+        RadioButtonGroup tools = new RadioButtonGroup();
+        RadioButton radio_terrain = new RadioButton(true, tools, MapEditor.i18n("tool_terrain"));
+        RadioButton radio_resource = new RadioButton(false, tools, MapEditor.i18n("tool_resources"));
+        PulldownButton<Brush> pulldown_terrain = new PulldownButton<>(gui_root, menu_terrain, 0, PULLDOWN_WIDTH);
+        PulldownButton<Brush> pulldown_resource = new PulldownButton<>(gui_root, menu_resource, 0, PULLDOWN_WIDTH);
+        radio_terrain.addMouseClickListener((_, _, _, _) -> {
+            selectBrush(chosenBrush(menu_terrain));
+            setFocus();
+        });
+        radio_resource.addMouseClickListener((_, _, _, _) -> {
+            selectBrush(chosenBrush(menu_resource));
+            setFocus();
+        });
+        // Choosing from a dropdown also switches to it.
+        menu_terrain.addItemChosenListener((menu, _) -> {
+            tools.mark(radio_terrain);
+            selectBrush(chosenBrush(menu));
+            setFocus();
+        });
+        menu_resource.addItemChosenListener((menu, _) -> {
+            tools.mark(radio_resource);
+            selectBrush(chosenBrush(menu));
+            setFocus();
+        });
+        Group group_terrain = tool(radio_terrain, pulldown_terrain);
+        Group group_resource = tool(radio_resource, pulldown_resource);
+        toolbar.addChild(group_terrain);
+        toolbar.addChild(group_resource);
+        group_terrain.place();
+        group_resource.place(group_terrain, RIGHT_MID, 20);
         label_radius = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
         label_intensity = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
         CheckBox check_trees = new CheckBox(view.draw_trees, MapEditor.i18n("show_trees"));
@@ -239,19 +250,30 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         toolbar.addChild(button_menu);
         toolbar.addChild(label_hint);
         toolbar.addChild(label_controls);
-        label_radius.place(previous, RIGHT_MID, 20);
+        label_radius.place(group_resource, RIGHT_MID, 20);
         label_intensity.place(label_radius, RIGHT_MID);
         check_trees.place(label_intensity, RIGHT_MID);
         check_wireframe.place(check_trees, RIGHT_MID);
         check_access.place(check_wireframe, RIGHT_MID);
         button_undo.place(check_access, RIGHT_MID, 20);
         button_menu.place(button_undo, RIGHT_MID);
-        label_hint.place(first_resource, BOTTOM_LEFT);
+        label_hint.place(group_terrain, BOTTOM_LEFT);
         label_controls.place(label_hint, BOTTOM_LEFT);
         toolbar.compileCanvas();
         addChild(toolbar);
 
         refreshLabels();
+    }
+
+    /** A tool's button with its dropdown beside it, kept together so the row stays as tall as the dropdown. */
+    private static @NonNull Group tool(@NonNull RadioButton radio, @NonNull PulldownButton<Brush> pulldown) {
+        Group group = new Group();
+        group.addChild(radio);
+        group.addChild(pulldown);
+        radio.place();
+        pulldown.place(radio, RIGHT_MID);
+        group.compileCanvas();
+        return group;
     }
 
     /**
@@ -381,6 +403,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     private static float toGrid(float meters) {
         return meters / HeightMap.METERS_PER_UNIT_GRID;
+    }
+
+    private static @NonNull Brush chosenBrush(@NonNull PulldownMenu<Brush> menu) {
+        return Objects.requireNonNull(menu.getItem(menu.getChosenItemIndex()).getAttachment());
     }
 
     private void selectBrush(@NonNull Brush new_brush) {

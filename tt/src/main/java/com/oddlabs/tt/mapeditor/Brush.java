@@ -4,7 +4,7 @@ import com.oddlabs.tt.procedural.Landscape;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-/** The brushes, in toolbar order: terrain shaping first, then resource painting. */
+/** The brushes, in dropdown order: terrain shaping in one dropdown, then resource painting in the other. */
 enum Brush {
     HEIGHT("brush_height", "hint_height", null),
     FLATTEN("brush_flatten", "hint_flatten", null),
