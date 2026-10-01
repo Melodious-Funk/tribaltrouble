@@ -86,7 +86,7 @@ final class MapEditorLoader implements LoadCallback {
         Picker picker = new Picker(manager, local_player, gui_root, render_queues, landscape_renderer, selection);
         // The editor's view toggles (trees, wireframe) are the renderer's cheat switches.
         Cheat view = new Cheat();
-        UIRenderer renderer = new DefaultRenderer(view, local_player, render_queues, world_info, landscape_renderer,
+        DefaultRenderer renderer = new DefaultRenderer(view, local_player, render_queues, world_info, landscape_renderer,
                 picker, selection, generator, new MatrixStack(), new MatrixStack(), null);
 
         GroundTextures ground = GroundTextures.create(world_info, settings,
@@ -108,8 +108,8 @@ final class MapEditorLoader implements LoadCallback {
                 ground.resourcesChanged(changed, x0, y0, x1, y1);
         });
         MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
-                new CameraState(generator.getFogInfo()), editor, ground, access_map, access, layer, settings, map_name, edited,
-                resources != null);
+                new CameraState(generator.getFogInfo()), editor, ground, access_map, access, layer,
+                new PlantLayer(world, access_map), renderer.getWater(), settings, map_name, edited, resources != null);
         Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
         gui_root.pushDelegate(delegate);
         return renderer;

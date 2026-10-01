@@ -41,6 +41,7 @@ import com.oddlabs.tt.render.MatrixStack;
 import com.oddlabs.tt.render.Picker;
 import com.oddlabs.tt.render.RenderQueues;
 import com.oddlabs.tt.render.Renderer;
+import com.oddlabs.tt.scenery.Water;
 import com.oddlabs.tt.viewer.Cheat;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -90,6 +91,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final @Nullable GroundTextures ground;
     private static final float ACCESS_UPDATE_INTERVAL = .25f;
     private final @NonNull AccessMap access_map;
+    private final @NonNull PlantLayer plants;
+    private final @NonNull Water water;
     private final @NonNull AccessOverlay access;
     private final @NonNull Label label_access_legend;
     // Seconds since the playable area last followed a stroke in progress.
@@ -150,7 +153,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
-            @NonNull AccessMap access_map, @NonNull AccessOverlay access, @NonNull ResourceLayer layer, @NonNull MapSettings settings,
+            @NonNull AccessMap access_map, @NonNull AccessOverlay access, @NonNull ResourceLayer layer,
+            @NonNull PlantLayer plants, @NonNull Water water, @NonNull MapSettings settings,
             @Nullable String map_name, boolean edited, boolean resources_edited) {
         super(gui_root, null);
         this.network = network;
@@ -160,6 +164,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.editor = editor;
         this.ground = ground;
         this.access_map = access_map;
+        this.plants = plants;
+        this.water = water;
         this.access = access;
         this.settings = settings;
         this.map_name = map_name;
@@ -502,7 +508,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     /**
      * Brings the playable area after the heights, now and then while painting and at once otherwise, takes away the
-     * resources an edit left off it, and brings the overlay after it.
+     * resources an edit left off it, and brings the overlay, the plants and the sea after it.
      */
     private void updateAccess(float t) {
         access_timer += t;
@@ -510,6 +516,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             access_timer = 0f;
             access_map.compute();
             access.mapChanged();
+            // The ground under them changed, so plants and the sea's open water follow the sort too.
+            plants.update();
+            water.updateOceanPatches();
             // Units could no longer reach them. Undoing the edit brings them back.
             if (layer.prune(pruned != null ? pruned : new ResourceLayer.Stroke())) {
                 resources_edited = true;
