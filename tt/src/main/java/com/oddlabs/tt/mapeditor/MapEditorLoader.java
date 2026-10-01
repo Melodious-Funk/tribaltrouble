@@ -63,6 +63,7 @@ final class MapEditorLoader implements LoadCallback {
             // The height map keeps this array, so saved heights must be in place before the world is built.
             for (int y = 0; y < terrain.length; y++)
                 System.arraycopy(heights[y], 0, terrain[y], 0, terrain[y].length);
+            TerrainEditor.pinEdges(terrain);
         }
         if (resources != null) {
             // Saved resources take the generated ones' place before the world plants them.

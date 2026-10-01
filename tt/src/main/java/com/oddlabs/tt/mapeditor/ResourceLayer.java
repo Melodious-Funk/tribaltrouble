@@ -15,6 +15,9 @@ import com.oddlabs.tt.model.IronSupply;
 import com.oddlabs.tt.model.Model;
 import com.oddlabs.tt.model.RockSupply;
 import com.oddlabs.tt.model.SupplyModel;
+import com.oddlabs.tt.pathfinder.Occupant;
+import com.oddlabs.tt.pathfinder.Region;
+import com.oddlabs.tt.pathfinder.StaticOccupant;
 import com.oddlabs.tt.pathfinder.UnitGrid;
 import com.oddlabs.tt.procedural.Landscape;
 import com.oddlabs.tt.render.SpriteKey;
@@ -71,6 +74,7 @@ final class ResourceLayer {
     private int disk_radius = -1;
 
     private boolean trees_changed;
+    private @Nullable Region opened_region;
 
     ResourceLayer(@NonNull World world, @NonNull AccessMap access, @NonNull MapSettings settings,
             @NonNull ChangeListener listener) {
@@ -266,7 +270,7 @@ final class ResourceLayer {
 
     /** Playable ground with room to spare, as the generator places resources. */
     private boolean canPlace(int x, int y) {
-        if (!inside(x, y) || kinds[y * size + x] != null || world.getUnitGrid().isGridOccupied(x, y))
+        if (!inside(x, y) || kinds[y * size + x] != null || isOccupied(x, y))
             return false;
         // Landscape.placeSupplies places them only on the playable region.
         if (access.get(x, y) != AccessMap.Kind.REGION)
@@ -305,7 +309,35 @@ final class ResourceLayer {
         return false;
     }
 
+    /** The region resources on opened up ground register in; nothing paths through it in the editor. */
+    private @NonNull Region openedRegion(int x, int y) {
+        Region region = opened_region;
+        if (region == null) {
+            region = new Region();
+            region.setPosition(x, y);
+            opened_region = region;
+        }
+        return region;
+    }
+
+    /**
+     * Whether something stands on a cell. The world marks every cell units could not reach when it was built with
+     * a static occupant, which stays when an edit opens the ground up; that one does not count.
+     */
+    private boolean isOccupied(int x, int y) {
+        Occupant occupant = world.getUnitGrid().getOccupant(x, y);
+        return occupant != null && !(occupant instanceof StaticOccupant);
+    }
+
     private void place(@NonNull Resource kind, int x, int y) {
+        UnitGrid grid = world.getUnitGrid();
+        // Ground an edit opened up still carries the world's unreachable mark and has no pathfinding region, which
+        // resources register themselves in. Clear the mark and give the cell the editor's region.
+        Occupant mark = grid.getOccupant(x, y);
+        if (mark instanceof StaticOccupant)
+            grid.freeGrid(x, y, mark);
+        if (grid.getRegion(x, y) == null)
+            grid.setRegion(x, y, openedRegion(x, y));
         Object object;
         if (kind.isTree()) {
             object = world.getTreeRoot().plantTree(world, kind.treeType(terrain), x, y);

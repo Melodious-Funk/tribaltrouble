@@ -243,7 +243,7 @@ final class TerrainEditor {
                 float gap = target - h;
                 if (gap * sign <= 0f)
                     continue;
-                heights[y][x] = clampHeight(h + gap * weight * intensity);
+                heights[y][x] = clampHeight(x, y, h + gap * weight * intensity);
                 changed = true;
             }
         }
@@ -275,7 +275,7 @@ final class TerrainEditor {
                 float distance = (float) Math.sqrt(dx * dx + dy * dy);
                 if (distance >= radius)
                     continue;
-                heights[y][x] = clampHeight(function.apply(x, y, plateau(distance, radius, radius * core)));
+                heights[y][x] = clampHeight(x, y, function.apply(x, y, plateau(distance, radius, radius * core)));
             }
         }
         markDirty(x0, y0, x1, y1);
@@ -329,8 +329,26 @@ final class TerrainEditor {
         return (h & 0xFFFFFF) / (float) 0xFFFFFF;
     }
 
-    private static float clampHeight(float h) {
+    /**
+     * Keeps a cell's height in range, and the outermost cells on the sea floor. The generator keeps them there, and
+     * the world wraps: the last row of the landscape takes its heights from the first, so a raised edge tears open
+     * into a wall that shows on the far side of the map.
+     */
+    private float clampHeight(int x, int y, float h) {
+        if (x == 0 || y == 0 || x == size - 1 || y == size - 1)
+            return MIN_HEIGHT;
         return Math.clamp(h, MIN_HEIGHT, MAX_HEIGHT);
+    }
+
+    /** Puts the outermost cells on the sea floor, as the generator does, for heights saved before it was kept. */
+    static void pinEdges(float @NonNull [] @NonNull [] heights) {
+        int last = heights.length - 1;
+        for (int i = 0; i <= last; i++) {
+            heights[0][i] = MIN_HEIGHT;
+            heights[last][i] = MIN_HEIGHT;
+            heights[i][0] = MIN_HEIGHT;
+            heights[i][last] = MIN_HEIGHT;
+        }
     }
 
     // ---- Pushing changes to the renderer ----

@@ -747,9 +747,12 @@ public final class Landscape {
     private void useHeights(float @NonNull [] @NonNull [] meters) {
         if (meters.length != unit_grids_per_world || meters[0].length != unit_grids_per_world)
             throw new IllegalArgumentException("Height map does not fit the island size");
+        int last = unit_grids_per_world - 1;
         for (int y = 0; y < unit_grids_per_world; y++) {
             for (int x = 0; x < unit_grids_per_world; x++) {
-                height.putPixel(x, y, meters[y][x] / height_scale);
+                // The edges stay on the sea floor, as generated: the world wraps, and a raised edge tears open.
+                boolean edge = x == 0 || y == 0 || x == last || y == last;
+                height.putPixel(x, y, edge ? 0f : meters[y][x] / height_scale);
             }
         }
         deriveTerrainMaps();
