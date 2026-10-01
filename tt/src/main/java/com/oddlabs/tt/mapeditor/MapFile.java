@@ -23,16 +23,17 @@ import java.util.zip.GZIPOutputStream;
  * A saved editor map: the generator settings plus, once edited, the whole height map and the resources.
  *
  * <p>What was never edited is generated again from the settings when the map is loaded. The file is a gzipped
- * stream of the magic, a version, the settings, whether heights and resources follow, an optional square grid of
- * heights in meters, and optionally the grid positions of each kind of resource. Version 1 files have no
- * resources, nor the flag for them.
+ * stream of the magic, a version, the settings, whether heights, resources and a preview follow, an optional
+ * preview picture, an optional square grid of heights in meters, and optionally the grid positions of each kind
+ * of resource. The preview comes before the heights so browsing maps reads little of each file. Version 1 files
+ * have no resources, and versions before 3 no preview, nor the flags for them.
  */
 record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
-               @Nullable Resources resources) {
+               @Nullable Resources resources, @Nullable MapPreview preview) {
     static final String EXTENSION = ".ttmap";
 
     private static final int MAGIC = 0x54_54_4D_50; // "TTMP"
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     /** Grid positions of every resource, one list per kind in {@link Resource} order. */
     record Resources(@NonNull List<int @NonNull []> @NonNull [] positions) {
@@ -86,6 +87,11 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                 writeSettings(out, settings);
                 out.writeBoolean(heights != null);
                 out.writeBoolean(resources != null);
+                out.writeBoolean(preview != null);
+                if (preview != null) {
+                    out.writeShort(preview.size());
+                    out.write(preview.rgb());
+                }
                 if (heights != null) {
                     out.writeInt(heights.length);
                     for (float[] row : heights) {
@@ -117,6 +123,8 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
             MapSettings settings = readSettings(in);
             boolean has_heights = in.readBoolean();
             boolean has_resources = version >= 2 && in.readBoolean();
+            boolean has_preview = version >= 3 && in.readBoolean();
+            MapPreview preview = has_preview ? readPreview(in) : null;
             float[][] heights = null;
             if (has_heights) {
                 int grid_size = in.readInt();
@@ -149,8 +157,40 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                 }
                 resources = new Resources(positions);
             }
-            return new MapFile(nameOf(path), settings, heights, resources);
+            if (preview == null && heights != null)
+                preview = MapPreview.render(heights, settings, resources);
+            return new MapFile(nameOf(path), settings, heights, resources, preview);
         }
+    }
+
+    /**
+     * The map's preview: the saved one, else one drawn from its saved heights.
+     *
+     * @return the preview, or null when the map keeps neither a preview nor heights
+     */
+    static @Nullable MapPreview loadPreview(@NonNull Path path) throws IOException {
+        boolean has_heights;
+        try (var in = open(path)) {
+            int version = readVersion(in);
+            readSettings(in);
+            has_heights = in.readBoolean();
+            if (version >= 2)
+                in.readBoolean(); // Whether resources follow; they come after the preview.
+            boolean has_preview = version >= 3 && in.readBoolean();
+            if (has_preview)
+                return readPreview(in);
+        }
+        // Older maps have no preview of their own; drawing one needs the heights.
+        return has_heights ? load(path).preview() : null;
+    }
+
+    private static @NonNull MapPreview readPreview(@NonNull DataInputStream in) throws IOException {
+        int size = in.readShort();
+        if (size <= 0 || size > MapPreview.MAX_SIZE)
+            throw new IOException("Bad preview size " + size);
+        byte[] rgb = new byte[size * size * 3];
+        in.readFully(rgb);
+        return new MapPreview(size, rgb);
     }
 
     /** Lists the saved maps, skipping any file that cannot be read. */

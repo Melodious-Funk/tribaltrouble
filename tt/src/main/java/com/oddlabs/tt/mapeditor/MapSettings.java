@@ -4,6 +4,7 @@ import com.oddlabs.matchmaking.Game;
 import com.oddlabs.registration.RegistrationKey;
 import com.oddlabs.tt.global.Globals;
 import com.oddlabs.tt.procedural.Landscape;
+import com.oddlabs.tt.procedural.LandscapeOverride;
 import com.oddlabs.tt.resource.IslandGenerator;
 import com.oddlabs.tt.util.WordsEncoding;
 import org.jspecify.annotations.NonNull;
@@ -101,10 +102,17 @@ record MapSettings(int size, int terrain, int hills, int trees, int supplies, in
     }
 
     @NonNull IslandGenerator createGenerator() {
+        return createGenerator(null);
+    }
+
+    /**
+     * @param override saved heights and resources to build the island with, or null to generate them
+     */
+    @NonNull IslandGenerator createGenerator(LandscapeOverride.@Nullable Source override) {
         // Same scaling as a skirmish game started from TerrainMenu.
         return new IslandGenerator(getMetersPerWorld(), Landscape.TerrainType.values()[terrain],
                 hills / (float) SLIDER_MAX, trees / (float) SLIDER_MAX, supplies / (float) SLIDER_MAX, seed * seed,
-                isArchipelago());
+                isArchipelago(), override);
     }
 
     @NonNull String toMapcode() {

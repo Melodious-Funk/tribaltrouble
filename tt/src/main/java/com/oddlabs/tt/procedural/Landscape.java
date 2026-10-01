@@ -18,6 +18,7 @@ import com.oddlabs.util.Color;
 import com.oddlabs.util.Utils;
 import org.joml.Vector4fc;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.opengl.GL11;
 
 import com.oddlabs.tt.landscape.IslandInfo;
@@ -133,6 +134,8 @@ public final class Landscape {
     private final float build_threshold;
     private final @NonNull TerrainType terrain;
     private final boolean archipelago;
+    // Resources to place instead of generating them, from a saved map.
+    private final LandscapeOverride.@Nullable Resources fixed_resources;
 
     private byte @NonNull [] @NonNull [] build;
     private byte @NonNull [] @NonNull [] dock;
@@ -144,7 +147,18 @@ public final class Landscape {
     public Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
             float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
             float random_start_pos, boolean archipelago) {
+        this(num_players, meters_per_world, terrain, detail_alpha_value, hills, vegetation_amount, supplies_amount,
+                seed, initial_unit_count, random_start_pos, archipelago, null);
+    }
+
+    /**
+     * @param override heights and resources to build the island with instead of generating them, or null
+     */
+    public Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
+            float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
+            float random_start_pos, boolean archipelago, @Nullable LandscapeOverride override) {
         this.terrain = terrain;
+        this.fixed_resources = override != null ? override.resources() : null;
         hills = (float) Math.sqrt(hills);
         this.num_players = num_players;
         this.features = 4;
@@ -248,6 +262,8 @@ public final class Landscape {
                 yield vikings;
             }
         };
+        if (override != null && override.heights() != null)
+            useHeights(override.heights());
 
         island_ids = access.copy();
         int last_id = 2;
@@ -642,21 +658,7 @@ public final class Landscape {
             }
         }
 
-        generateWaterGrid();
-
-        slope = height.copy().lineart();
-        if (DEBUG) slope.copy().dynamicRange().toLayer().saveAsPNG("slope");
-        relheight = height.copy().relativeIntensityNormalized(Math.max(1, unit_grids_per_world >> 5));
-        if (DEBUG) relheight.toLayer().saveAsPNG("relheight");
-        if (archipelago) {
-            Channel inv = water_map.copy().invert();
-            access = generateThresholdMap(slope, access_threshold).channelMultiply(inv);
-        } else {
-            access = generateThresholdMap(slope, access_threshold).largestConnected(1f);
-        }
-        access_exported = access.copy();
-        if (DEBUG) access.toLayer().saveAsPNG("access");
-        build = Landscape.generateBuildMap(generateThresholdMap(slope, build_threshold).channelMultiply(access));
+        deriveTerrainMaps();
     }
 
     private void generateTerrainViking() {
@@ -719,6 +721,11 @@ public final class Landscape {
             }
         }
 
+        deriveTerrainMaps();
+    }
+
+    /** Works out the water, slope, access and build maps from the height map. */
+    private void deriveTerrainMaps() {
         generateWaterGrid();
 
         slope = height.copy().lineart();
@@ -734,6 +741,18 @@ public final class Landscape {
         access_exported = access.copy();
         if (DEBUG) access.toLayer().saveAsPNG("access");
         build = Landscape.generateBuildMap(generateThresholdMap(slope, build_threshold).channelMultiply(access));
+    }
+
+    /** Puts saved heights in place of the generated ones and works out what follows from them again. */
+    private void useHeights(float @NonNull [] @NonNull [] meters) {
+        if (meters.length != unit_grids_per_world || meters[0].length != unit_grids_per_world)
+            throw new IllegalArgumentException("Height map does not fit the island size");
+        for (int y = 0; y < unit_grids_per_world; y++) {
+            for (int x = 0; x < unit_grids_per_world; x++) {
+                height.putPixel(x, y, meters[y][x] / height_scale);
+            }
+        }
+        deriveTerrainMaps();
     }
 
     // shape beaches
@@ -1055,25 +1074,28 @@ public final class Landscape {
         float accessible = supplies.sum();
 
         // place trees
-        trees = placeSupplies(tree_channel, supplies, 64, (int) (vegetation_amount * max_trees * (accessible / area)),
-                0.33f);
+        trees = fixed_resources != null ? placeSupplies(fixed_resources.trees(), 0.33f) : placeSupplies(tree_channel,
+                supplies, 64, (int) (vegetation_amount * max_trees * (accessible / area)), 0.33f);
         access.channelSubtract(trees);
         if (DEBUG) trees.toLayer().saveAsPNG("supplies_trees_placed");
 
         // place palmtrees
-        palmtrees = placeSupplies(palmtree_channel, supplies, 64,
-                (int) (vegetation_amount * max_palmtrees * (accessible / area)), 0.25f);
+        palmtrees = fixed_resources != null ? placeSupplies(fixed_resources.palm_trees(), 0.25f)
+                : placeSupplies(palmtree_channel, supplies, 64,
+                        (int) (vegetation_amount * max_palmtrees * (accessible / area)), 0.25f);
         access.channelSubtract(palmtrees);
         if (DEBUG) palmtrees.toLayer().saveAsPNG("supplies_palmtrees_placed");
 
         // place rock
-        rock = placeSupplies(rock_channel, supplies, 64, (int) (supplies_amount * max_rock), 0f);
+        rock = fixed_resources != null ? placeSupplies(fixed_resources.rocks(), 0f)
+                : placeSupplies(rock_channel, supplies, 64, (int) (supplies_amount * max_rock), 0f);
         access.channelSubtract(rock);
         shadow.channelBrightest(rock.copy().multiply(0.5f));
         if (DEBUG) rock.toLayer().saveAsPNG("supplies_rock_placed");
 
         // place iron
-        iron = placeSupplies(iron_channel, supplies, 64, (int) (supplies_amount * max_iron), 0f);
+        iron = fixed_resources != null ? placeSupplies(fixed_resources.iron(), 0f)
+                : placeSupplies(iron_channel, supplies, 64, (int) (supplies_amount * max_iron), 0f);
         access.channelSubtract(iron);
         shadow.channelBrightest(iron.copy().multiply(0.5f));
         if (DEBUG) iron.toLayer().saveAsPNG("supplies_iron_placed");
@@ -1085,7 +1107,8 @@ public final class Landscape {
             IO.println("Number of iron ore placed: " + iron.count(1f));
         }
 
-        if (!archipelago) {
+        // A saved map keeps exactly the resources it was made with.
+        if (!archipelago && fixed_resources == null) {
             // place extra supplies around starting locations
             int num_rock = 2;
             int num_iron = 1;
@@ -1184,6 +1207,35 @@ public final class Landscape {
             }
             lower_bound -= interval_size;
             upper_bound -= interval_size;
+        }
+        return place;
+    }
+
+    /**
+     * Places supplies at saved grid positions, with the shadows the generator gives them. Positions units cannot
+     * reach, which includes the players' starting areas, are left out.
+     */
+    private @NonNull Channel placeSupplies(@NonNull List<int @NonNull []> positions, float shadow_alpha_val) {
+        int scaleshift = Utils.powerOf2Log2(unit_grids_per_world * meters_per_height_unit / meters_per_world);
+        Channel supplyshadow_alpha = new Channel(supplyshadow_size << 1, supplyshadow_size << 1).place(new Channel(
+                supplyshadow_size, supplyshadow_size).fill(1f), supplyshadow_size >> 1,
+                supplyshadow_size >> 1).smoothFast();
+        Channel supplyshadow = new Channel(supplyshadow_size << 1, supplyshadow_size << 1);
+        Channel supplyshadow_alpha2 = supplyshadow_alpha.copy().brightness(shadow_alpha_val);
+        Channel place = new Channel(unit_grids_per_world, unit_grids_per_world);
+        for (int[] position : positions) {
+            int x = position[0];
+            int y = position[1];
+            if (x <= 0 || y <= 0 || x >= unit_grids_per_world - 1 || y >= unit_grids_per_world - 1
+                    || access.getPixel(x, y) <= 0 || place.getPixel(x, y) > 0)
+                continue;
+            place.putPixel(x, y, 1f);
+            if (shadow_alpha_val > 0f) {
+                int x_pixel = (x - supplyshadow_size + 1) >> scaleshift;
+                int y_pixel = (y - supplyshadow_size + 1) >> scaleshift;
+                highlight.place(supplyshadow, supplyshadow_alpha, x_pixel, y_pixel);
+                shadow.placeBrightest(supplyshadow_alpha2, x_pixel, y_pixel);
+            }
         }
         return place;
     }

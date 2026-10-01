@@ -774,16 +774,17 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
         getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), dir, map_name != null ? map_name : "", name -> {
             boolean keep_heights = edited || editor.isModified();
-            MapFile.Resources resources = null;
-            if (resources_edited) {
-                @SuppressWarnings("unchecked")
-                List<int[]>[] positions = new List[Resource.values().length];
-                for (Resource kind : Resource.values())
-                    positions[kind.ordinal()] = layer.positions(kind);
-                resources = new MapFile.Resources(positions);
-            }
+            @SuppressWarnings("unchecked")
+            List<int[]>[] positions = new List[Resource.values().length];
+            for (Resource kind : Resource.values())
+                positions[kind.ordinal()] = layer.positions(kind);
+            MapFile.Resources current = new MapFile.Resources(positions);
+            float[][] heights = editor.copyHeights();
+            // The preview shows the map as it is, even what is generated again from the settings.
+            MapPreview preview = MapPreview.render(heights, settings, current);
             try {
-                new MapFile(name, settings, keep_heights ? editor.copyHeights() : null, resources).save(dir);
+                new MapFile(name, settings, keep_heights ? heights : null, resources_edited ? current : null,
+                        preview).save(dir);
             } catch (IOException e) {
                 getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("save_failed", e.getMessage())));
                 return;

@@ -5,11 +5,15 @@ import com.oddlabs.tt.global.Globals;
 import com.oddlabs.tt.global.Settings;
 import com.oddlabs.tt.landscape.HeightMap;
 import com.oddlabs.tt.procedural.Landscape;
+import com.oddlabs.tt.procedural.LandscapeOverride;
 import com.oddlabs.tt.render.Texture;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.opengl.GL11;
 
+import java.io.IOException;
 import java.io.Serial;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.Instant;
 
@@ -30,9 +34,21 @@ public final class IslandGenerator implements WorldGenerator {
     private final float supplies_amount;
     private final int seed;
     private final boolean archipelago;
+    // Saved heights and resources to build the island with, or null to generate it all.
+    private final LandscapeOverride.@Nullable Source override;
 
     public IslandGenerator(int meters_per_world, Landscape.@NonNull TerrainType terrain, float hills,
             float vegetation_amount, float supplies_amount, int seed, boolean archipelago) {
+        this(meters_per_world, terrain, hills, vegetation_amount, supplies_amount, seed, archipelago, null);
+    }
+
+    /**
+     * @param override where to get the heights and resources a saved map builds the island with, or null
+     */
+    public IslandGenerator(int meters_per_world, Landscape.@NonNull TerrainType terrain, float hills,
+            float vegetation_amount, float supplies_amount, int seed, boolean archipelago,
+            LandscapeOverride.@Nullable Source override) {
+        this.override = override;
         this.hills = hills;
         this.vegetation_amount = vegetation_amount;
         this.supplies_amount = supplies_amount;
@@ -85,8 +101,14 @@ public final class IslandGenerator implements WorldGenerator {
                 detail_prefade_level);
         base_level -= detail_mip_level;
         base_level = Math.min(base_level, 1);
+        LandscapeOverride fixed;
+        try {
+            fixed = override != null ? override.load() : null;
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not read the map to play", e);
+        }
         Landscape landscape = new Landscape(num_players, meters_per_world, terrain, detail_prefade, hills,
-                vegetation_amount, supplies_amount, seed, initial_unit_count, random_start_pos, archipelago);
+                vegetation_amount, supplies_amount, seed, initial_unit_count, random_start_pos, archipelago, fixed);
         Instant time_after = Instant.now();
         IO.println("Landscape created in " + Duration.between(time_before, time_after));
         BlendInfo[] blend_infos = landscape.getBlendInfos();

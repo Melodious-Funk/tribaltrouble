@@ -272,7 +272,8 @@ public final class MapEditorForm extends Form {
             return;
         gui_root.addModalForm(new SaveMapDialog(gui_root, dir, map_name != null ? map_name : "", name -> {
             try {
-                new MapFile(name, settings, heights, resources).save(dir);
+                MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources) : null;
+                new MapFile(name, settings, heights, resources, preview).save(dir);
                 map_name = name;
                 refresh();
                 gui_root.getInfoPrinter().print(MapEditor.i18n("saved", name));
@@ -286,7 +287,8 @@ public final class MapEditorForm extends Form {
         Path dir = mapsDir();
         if (dir == null)
             return;
-        gui_root.addModalForm(new LoadMapDialog(gui_root, dir, entry -> {
+        gui_root.addModalForm(new LoadMapDialog(gui_root, dir, MapEditor.i18n("load_caption"),
+                MapEditor.i18n("load_button"), entry -> {
             MapFile map;
             try {
                 map = MapFile.load(entry.path());

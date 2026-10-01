@@ -39,12 +39,16 @@ import com.oddlabs.tt.guievent.ItemChosenListener;
 import com.oddlabs.tt.guievent.MouseClickListener;
 import com.oddlabs.tt.guievent.ValueListener;
 import com.oddlabs.tt.landscape.WorldParameters;
+import com.oddlabs.tt.mapeditor.CustomMap;
+import com.oddlabs.tt.mapeditor.MapEditor;
 import com.oddlabs.tt.model.RacesResources;
 import com.oddlabs.tt.net.GameNetwork;
 import com.oddlabs.tt.net.Network;
 import com.oddlabs.tt.net.PlayerSlot;
 import com.oddlabs.tt.procedural.Landscape;
 import com.oddlabs.tt.render.Renderer;
+import com.oddlabs.tt.resource.IslandGenerator;
+import com.oddlabs.tt.resource.WorldGenerator;
 import com.oddlabs.tt.util.ServerMessageBundler;
 import com.oddlabs.tt.util.Utils;
 import com.oddlabs.tt.util.WordsEncoding;
@@ -368,6 +372,12 @@ public final class TerrainMenu extends Group {
         button_cancel.addMouseClickListener(new CancelButtonListener());
         HorizButton button_mapcode = new HorizButton(i18n("enter_map_code"), 170);
         button_mapcode.addMouseClickListener(new MapcodeListener());
+        // A saved map's file is read where the game is generated, so only a single player game can use one.
+        HorizButton button_custom = new HorizButton(i18n("custom_map"), 170);
+        button_custom.addMouseClickListener((_, _, _, _) -> MapEditor.chooseMapToPlay(gui_root, custom -> {
+            if (startGame(custom))
+                button_ok.setDisabled(true);
+        }));
         button_advanced = new HorizButton(i18n("advanced"), 130);
         button_advanced.addMouseClickListener((_, _, _, _) -> gui_root.addModalForm(new AdvancedSettingsForm(
                 advanced_settings, Globals.SHIPS_ENABLED,
@@ -383,6 +393,10 @@ public final class TerrainMenu extends Group {
         button_cancel.place();
         button_ok.place(button_cancel, LEFT_MID);
         button_mapcode.place(button_ok, LEFT_MID);
+        if (!multiplayer) {
+            group_buttons.addChild(button_custom);
+            button_custom.place(button_mapcode, LEFT_MID);
+        }
 
         group_buttons.compileCanvas();
         addChild(group_buttons);
@@ -779,6 +793,13 @@ public final class TerrainMenu extends Group {
     }
 
     public boolean startGame() {
+        return startGame(null);
+    }
+
+    /**
+     * @param custom a saved map to play instead of the island the menu describes, or null
+     */
+    private boolean startGame(@Nullable CustomMap custom) {
         int hills = slider_hills.getValue();
         int vegetation_amount = slider_vegetation.getValue();
         int supplies_amount = slider_supplies.getValue();
@@ -788,7 +809,8 @@ public final class TerrainMenu extends Group {
         if (rated)
             team_pulldown_menus[0].chooseItem(team_pulldown_menus[0].getChosenItemIndex() % 2);
         AdvancedSettingsForm.Values settings = rated ? AdvancedSettingsForm.Values.defaults() : advanced_settings;
-        int size = pulldown_size.getChosenItemIndex();
+        int size = custom != null ? custom.getSizeIndex() : pulldown_size.getChosenItemIndex();
+        String mapcode = custom != null ? custom.getMapcode() : label_mapcode.getContents();
         // Archipelago islands are only reachable by ship, so it always plays with boats.
         boolean ships = Globals.SHIPS_ENABLED && (settings.ships() || ARCHIPELAGO[size]);
         if (multiplayer) {
@@ -851,7 +873,7 @@ public final class TerrainMenu extends Group {
         // spotless:off
         WorldParameters world_params = WorldParameters.builder()
                 .initialGameSpeed(multiplayer ? game.getGamespeed() : Globals.gamespeed)
-                .mapcode(label_mapcode.getContents())
+                .mapcode(mapcode)
                 .initialUnitCount(settings.startingUnits())
                 .maxUnitCount(settings.maxUnits())
                 .mapSize(size)
@@ -859,19 +881,20 @@ public final class TerrainMenu extends Group {
                 .ships(ships)
                 .build();
         // spotless:on
+        WorldGenerator generator = custom != null ? custom.createGenerator() : new IslandGenerator(SIZES[size],
+                terrain_type,
+                hills / (float) SLIDER_MAX_VALUE,
+                vegetation_amount / (float) SLIDER_MAX_VALUE,
+                supplies_amount / (float) SLIDER_MAX_VALUE,
+                seed * seed,
+                ARCHIPELAGO[size] && Globals.SHIPS_ENABLED);
         GameNetwork game_network = Menu.startNewGame(network, gui_root,
                 menu,
                 world_params,
                 ingame_info,
                 new Menu.DefaultWorldInitAction(),
                 game,
-                SIZES[size],
-                terrain_type,
-                hills / (float) SLIDER_MAX_VALUE,
-                vegetation_amount / (float) SLIDER_MAX_VALUE,
-                supplies_amount / (float) SLIDER_MAX_VALUE,
-                seed * seed,
-                ARCHIPELAGO[size] && Globals.SHIPS_ENABLED,
+                generator,
                 ai_names,
                 player_count);
         game_network.getClient().getServerInterface().setPlayerSlot(0, PlayerSlot.HUMAN,
@@ -891,7 +914,7 @@ public final class TerrainMenu extends Group {
             game_network.getClient().getServerInterface().startServer();
             IO.println("Start server");
         }
-        IO.println("Map code: " + label_mapcode.getContents());
+        IO.println("Map code: " + mapcode + (custom != null ? " (custom map " + custom.getName() + ")" : ""));
         return true;
     }
 
