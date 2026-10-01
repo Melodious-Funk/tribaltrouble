@@ -31,9 +31,11 @@ import java.util.zip.GZIPOutputStream;
 record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
                @Nullable Resources resources, @Nullable MapPreview preview) {
     static final String EXTENSION = ".ttmap";
+    /** The newest map version, which {@link #writeBody} writes. */
+    static final int BODY_VERSION = 3;
 
     private static final int MAGIC = 0x54_54_4D_50; // "TTMP"
-    private static final int VERSION = 3;
+    private static final int VERSION = BODY_VERSION;
 
     /** Grid positions of every resource, one list per kind in {@link Resource} order. */
     record Resources(@NonNull List<int @NonNull []> @NonNull [] positions) {
@@ -84,32 +86,7 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                     Files.newOutputStream(temp))))) {
                 out.writeInt(MAGIC);
                 out.writeInt(VERSION);
-                writeSettings(out, settings);
-                out.writeBoolean(heights != null);
-                out.writeBoolean(resources != null);
-                out.writeBoolean(preview != null);
-                if (preview != null) {
-                    out.writeShort(preview.size());
-                    out.write(preview.rgb());
-                }
-                if (heights != null) {
-                    out.writeInt(heights.length);
-                    for (float[] row : heights) {
-                        for (float height : row) {
-                            out.writeFloat(height);
-                        }
-                    }
-                }
-                if (resources != null) {
-                    for (Resource kind : Resource.values()) {
-                        List<int[]> positions = resources.of(kind);
-                        out.writeInt(positions.size());
-                        for (int[] position : positions) {
-                            out.writeShort(position[0]);
-                            out.writeShort(position[1]);
-                        }
-                    }
-                }
+                writeBody(out);
             }
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         } finally {
@@ -117,50 +94,85 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         }
     }
 
+    /** Writes everything after the magic and version, as a campaign file also keeps its levels. */
+    void writeBody(@NonNull DataOutputStream out) throws IOException {
+        writeSettings(out, settings);
+        out.writeBoolean(heights != null);
+        out.writeBoolean(resources != null);
+        out.writeBoolean(preview != null);
+        if (preview != null) {
+            out.writeShort(preview.size());
+            out.write(preview.rgb());
+        }
+        if (heights != null) {
+            out.writeInt(heights.length);
+            for (float[] row : heights) {
+                for (float height : row) {
+                    out.writeFloat(height);
+                }
+            }
+        }
+        if (resources != null) {
+            for (Resource kind : Resource.values()) {
+                List<int[]> positions = resources.of(kind);
+                out.writeInt(positions.size());
+                for (int[] position : positions) {
+                    out.writeShort(position[0]);
+                    out.writeShort(position[1]);
+                }
+            }
+        }
+    }
+
     static @NonNull MapFile load(@NonNull Path path) throws IOException {
         try (var in = open(path)) {
-            int version = readVersion(in);
-            MapSettings settings = readSettings(in);
-            boolean has_heights = in.readBoolean();
-            boolean has_resources = version >= 2 && in.readBoolean();
-            boolean has_preview = version >= 3 && in.readBoolean();
-            MapPreview preview = has_preview ? readPreview(in) : null;
-            float[][] heights = null;
-            if (has_heights) {
-                int grid_size = in.readInt();
-                if (grid_size != gridSize(settings))
-                    throw new IOException("Height map does not fit the island size");
-                heights = new float[grid_size][grid_size];
-                for (float[] row : heights) {
-                    for (int x = 0; x < row.length; x++) {
-                        row[x] = in.readFloat();
-                    }
-                }
-            }
-            Resources resources = null;
-            if (has_resources) {
-                int grid_size = gridSize(settings);
-                @SuppressWarnings("unchecked")
-                List<int[]>[] positions = new List[Resource.values().length];
-                for (int k = 0; k < positions.length; k++) {
-                    int count = in.readInt();
-                    if (count < 0 || count > grid_size * grid_size)
-                        throw new IOException("Bad resource count " + count);
-                    positions[k] = new ArrayList<>(count);
-                    for (int i = 0; i < count; i++) {
-                        int x = in.readShort();
-                        int y = in.readShort();
-                        if (x < 0 || y < 0 || x >= grid_size || y >= grid_size)
-                            throw new IOException("Resource outside the island");
-                        positions[k].add(new int[]{x, y});
-                    }
-                }
-                resources = new Resources(positions);
-            }
-            if (preview == null && heights != null)
-                preview = MapPreview.render(heights, settings, resources);
-            return new MapFile(nameOf(path), settings, heights, resources, preview);
+            return readBody(in, readVersion(in), nameOf(path));
         }
+    }
+
+    /** Reads what {@link #writeBody} wrote, for a file of the given map version. */
+    static @NonNull MapFile readBody(@NonNull DataInputStream in, int version, @NonNull String name)
+            throws IOException {
+        MapSettings settings = readSettings(in);
+        boolean has_heights = in.readBoolean();
+        boolean has_resources = version >= 2 && in.readBoolean();
+        boolean has_preview = version >= 3 && in.readBoolean();
+        MapPreview preview = has_preview ? readPreview(in) : null;
+        float[][] heights = null;
+        if (has_heights) {
+            int grid_size = in.readInt();
+            if (grid_size != gridSize(settings))
+                throw new IOException("Height map does not fit the island size");
+            heights = new float[grid_size][grid_size];
+            for (float[] row : heights) {
+                for (int x = 0; x < row.length; x++) {
+                    row[x] = in.readFloat();
+                }
+            }
+        }
+        Resources resources = null;
+        if (has_resources) {
+            int grid_size = gridSize(settings);
+            @SuppressWarnings("unchecked")
+            List<int[]>[] positions = new List[Resource.values().length];
+            for (int k = 0; k < positions.length; k++) {
+                int count = in.readInt();
+                if (count < 0 || count > grid_size * grid_size)
+                    throw new IOException("Bad resource count " + count);
+                positions[k] = new ArrayList<>(count);
+                for (int i = 0; i < count; i++) {
+                    int x = in.readShort();
+                    int y = in.readShort();
+                    if (x < 0 || y < 0 || x >= grid_size || y >= grid_size)
+                        throw new IOException("Resource outside the island");
+                    positions[k].add(new int[]{x, y});
+                }
+            }
+            resources = new Resources(positions);
+        }
+        if (preview == null && heights != null)
+            preview = MapPreview.render(heights, settings, resources);
+        return new MapFile(name, settings, heights, resources, preview);
     }
 
     /**

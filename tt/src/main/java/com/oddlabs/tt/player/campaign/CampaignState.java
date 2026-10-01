@@ -1,6 +1,7 @@
 package com.oddlabs.tt.player.campaign;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -11,6 +12,8 @@ public final class CampaignState implements Serializable {
 
     public static final int RACE_VIKINGS = 0; // DON'T CHANGE! will ruin serializability
     public static final int RACE_NATIVES = 1;
+    /** A campaign made in the campaign editor, named by {@link #getCustomCampaign}. */
+    public static final int RACE_CUSTOM = 2;
 
     public static final int DIFFICULTY_EASY = 1;
     public static final int DIFFICULTY_NORMAL = 0; //Serializable defaults to 0
@@ -22,7 +25,7 @@ public final class CampaignState implements Serializable {
     public static final int ISLAND_SEMI_AVAILABLE = 4;
     public static final int ISLAND_HIDDEN = 5;
 
-    private final int @NonNull [] island_states;
+    private int @NonNull [] island_states;
 
     private int prev_island;
     private int current_island = -1;
@@ -38,6 +41,8 @@ public final class CampaignState implements Serializable {
     private long date;
     private int race;
     private int difficulty;
+    // Added later; older savegames read it as null.
+    private @Nullable String custom_campaign;
 
     public CampaignState(int @NonNull [] initial_states) {
         island_states = new int[initial_states.length];
@@ -50,6 +55,40 @@ public final class CampaignState implements Serializable {
             island_states[index] = ISLAND_AVAILABLE;
         else if (island_states[index] != ISLAND_COMPLETED)
             island_states[index] = state;
+    }
+
+    public int getNumIslands() {
+        return island_states.length;
+    }
+
+    /**
+     * Fits the island count to a custom campaign whose levels changed since this campaign began: new levels are
+     * locked until the one before them is won, and with no level won yet the first is open.
+     */
+    public void setNumIslands(int count) {
+        if (count == island_states.length)
+            return;
+        int[] states = new int[count];
+        for (int i = 0; i < count; i++) {
+            if (i < island_states.length)
+                states[i] = island_states[i];
+            else
+                states[i] = i > 0 && states[i - 1] == ISLAND_COMPLETED ? ISLAND_AVAILABLE : ISLAND_UNAVAILABLE;
+        }
+        if (count > 0 && states[0] == ISLAND_UNAVAILABLE)
+            states[0] = ISLAND_AVAILABLE;
+        island_states = states;
+        if (current_island >= count)
+            current_island = -1;
+    }
+
+    /** The custom campaign's name, for a {@link #RACE_CUSTOM} campaign. */
+    public @Nullable String getCustomCampaign() {
+        return custom_campaign;
+    }
+
+    public void setCustomCampaign(@Nullable String custom_campaign) {
+        this.custom_campaign = custom_campaign;
     }
 
     public int getIslandState(int index) {

@@ -11,6 +11,7 @@ import com.oddlabs.tt.landscape.LandscapeResources;
 import com.oddlabs.tt.landscape.NotificationListener;
 import com.oddlabs.tt.landscape.World;
 import com.oddlabs.tt.landscape.WorldParameters;
+import com.oddlabs.tt.model.RacesResources;
 import com.oddlabs.tt.player.Player;
 import com.oddlabs.tt.player.PlayerInfo;
 import com.oddlabs.tt.render.DefaultRenderer;
@@ -31,7 +32,8 @@ import java.util.List;
 
 /**
  * Builds the editor's island behind the progress screen, the same way the main menu builds its backdrop island:
- * a world with a single idle player and no races loaded, since the editor only shapes terrain.
+ * a world with a single idle player. Races are loaded only for a campaign level, to show its tribes' models; the
+ * map editor only shapes terrain.
  */
 final class MapEditorLoader implements LoadCallback {
     private final @NonNull NetworkSelector network;
@@ -39,14 +41,28 @@ final class MapEditorLoader implements LoadCallback {
     private final @Nullable String map_name;
     private final float @Nullable [] @Nullable [] heights;
     private final MapFile.@Nullable Resources resources;
+    private final @Nullable CampaignSession session;
 
     MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings, @Nullable String map_name,
             float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources) {
+        this(network, settings, map_name, heights, resources, null);
+    }
+
+    /** Opens a campaign's level, its island with its tribes' units and buildings. */
+    MapEditorLoader(@NonNull NetworkSelector network, @NonNull CampaignSession session) {
+        this(network, session.getLevel().settings, null, session.getLevel().heights, session.getLevel().resources,
+                session);
+    }
+
+    private MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings,
+            @Nullable String map_name, float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources,
+            @Nullable CampaignSession session) {
         this.network = network;
         this.settings = settings;
         this.map_name = map_name;
         this.heights = heights;
         this.resources = resources;
+        this.session = session;
     }
 
     @Override
@@ -77,7 +93,9 @@ final class MapEditorLoader implements LoadCallback {
 
         RenderQueues render_queues = new RenderQueues();
         LandscapeResources landscape_resources = World.loadCommon(render_queues);
-        World world = World.newWorld(AudioManager.getManager(), landscape_resources, null, new NotificationListener() {
+        // A campaign level shows the tribes' models, which the races bring.
+        RacesResources races = session != null ? World.loadInGame(render_queues) : null;
+        World world = World.newWorld(AudioManager.getManager(), landscape_resources, races, new NotificationListener() {
         }, world_params, world_info, generator.getTerrainType(), players, generator.getFogInfo());
         AnimationManager manager = new AnimationManager();
         LandscapeRenderer landscape_renderer = new LandscapeRenderer(world, world_info, manager);
@@ -97,19 +115,29 @@ final class MapEditorLoader implements LoadCallback {
         ResourceSnapper snapper = new ResourceSnapper(world);
         AccessMap access_map = new AccessMap(terrain, settings);
         AccessOverlay access = new AccessOverlay(access_map);
+        ResourceLayer layer = new ResourceLayer(world, access_map, settings, (changed, x0, y0, x1, y1) -> {
+            if (ground != null)
+                ground.resourcesChanged(changed, x0, y0, x1, y1);
+        });
+        CampaignTools campaign = null;
+        if (session != null && races != null) {
+            ScenarioLayer scenario = new ScenarioLayer(world, races, access_map, layer,
+                    session.getLevel().scenario);
+            campaign = new CampaignTools(session, scenario);
+            layer.setTaken(scenario::isTaken);
+        }
+        ScenarioLayer objects = campaign != null ? campaign.getLayer() : null;
         TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, (x0, y0, x1, y1) -> {
             snapper.snap(x0, y0, x1, y1);
             if (ground != null)
                 ground.heightsChanged(x0, y0, x1, y1);
             access_map.heightsChanged();
-        });
-        ResourceLayer layer = new ResourceLayer(world, access_map, settings, (changed, x0, y0, x1, y1) -> {
-            if (ground != null)
-                ground.resourcesChanged(changed, x0, y0, x1, y1);
+            if (objects != null)
+                objects.heightsChanged(x0, y0, x1, y1);
         });
         MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
                 new CameraState(generator.getFogInfo()), editor, ground, access_map, access, layer,
-                new PlantLayer(world, access_map), renderer.getWater(), settings, map_name, edited, resources != null);
+                new PlantLayer(world, access_map), renderer.getWater(), settings, map_name, edited, resources != null, campaign);
         Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
         gui_root.pushDelegate(delegate);
         return renderer;

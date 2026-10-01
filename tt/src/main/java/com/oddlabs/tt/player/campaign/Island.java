@@ -1,6 +1,7 @@
 package com.oddlabs.tt.player.campaign;
 
 import com.oddlabs.matchmaking.Game;
+import com.oddlabs.matchmaking.MatchmakingServerInterface;
 import com.oddlabs.net.NetworkSelector;
 import com.oddlabs.tt.delegate.Menu;
 import com.oddlabs.tt.gui.Form;
@@ -19,10 +20,10 @@ import com.oddlabs.tt.pathfinder.UnitGrid;
 import com.oddlabs.tt.player.AI;
 import com.oddlabs.tt.player.Player;
 import com.oddlabs.tt.procedural.Landscape;
+import com.oddlabs.tt.resource.WorldGenerator;
 import com.oddlabs.tt.trigger.campaign.DefeatTrigger;
 import com.oddlabs.tt.util.StateChecksum;
 import com.oddlabs.tt.util.Target;
-import com.oddlabs.tt.viewer.InGameInfo;
 import com.oddlabs.tt.viewer.WorldViewer;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -53,8 +54,23 @@ public abstract class Island {
     protected final @NonNull GameNetwork startNewGame(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root,
             int meters_per_world, Landscape.@NonNull TerrainType terrain, float hills, float vegetation_amount,
             float supplies_amount, int seed, int campaign_num, int initial_units, String[] ai_names) {
-        InGameInfo ingame_info = new CampaignInGameInfo(campaign);
-        WorldInitAction init_action = (@NonNull WorldViewer viewer) -> {
+        return Menu.startNewGame(network, gui_root, null, new WorldParameters(Game.GAMESPEED_NORMAL,
+                "Campaign" + campaign_num, initial_units,
+                Player.DEFAULT_MAX_UNIT_COUNT),
+                new CampaignInGameInfo(campaign),
+                newInitAction(),
+                null, meters_per_world, terrain, hills, vegetation_amount, supplies_amount, seed, false, ai_names);
+    }
+
+    /** Starts the island a generator builds, such as a custom campaign's level. */
+    protected final @NonNull GameNetwork startNewGame(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root,
+            @NonNull WorldGenerator generator, @NonNull WorldParameters world_params, String[] ai_names) {
+        return Menu.startNewGame(network, gui_root, null, world_params, new CampaignInGameInfo(campaign),
+                newInitAction(), null, generator, ai_names, MatchmakingServerInterface.MAX_PLAYERS);
+    }
+
+    private @NonNull WorldInitAction newInitAction() {
+        return (@NonNull WorldViewer viewer) -> {
             world_viewer = viewer;
             Menu.completeGameSetupHack(world_viewer);
             if (!campaign.getState().hasRubberWeapons()) {
@@ -88,14 +104,14 @@ public abstract class Island {
                     throw new IllegalArgumentException("unexpected difficulty: " + campaign.getState().getDifficulty());
             }
             start();
-            new DefeatTrigger(world_viewer, campaign, viewer.getLocalPlayer().getChieftain());
+            if (hasDefaultDefeat())
+                new DefeatTrigger(world_viewer, campaign, viewer.getLocalPlayer().getChieftain());
         };
-        return Menu.startNewGame(network, gui_root, null, new WorldParameters(Game.GAMESPEED_NORMAL,
-                "Campaign" + campaign_num, initial_units,
-                Player.DEFAULT_MAX_UNIT_COUNT),
-                ingame_info,
-                init_action,
-                null, meters_per_world, terrain, hills, vegetation_amount, supplies_amount, seed, false, ai_names);
+    }
+
+    /** Whether the island is lost the usual way, when the chieftain dies or every unit is gone. */
+    protected boolean hasDefaultDefeat() {
+        return true;
     }
 
     protected final @Nullable WorldViewer getViewer() {

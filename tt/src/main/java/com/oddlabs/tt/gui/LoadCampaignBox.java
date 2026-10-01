@@ -90,6 +90,7 @@ public final class LoadCampaignBox extends GUIObject implements DeterministicSer
             String race = switch (campaign_state.getRace()) {
                 case CampaignState.RACE_VIKINGS -> i18n("vikings");
                 case CampaignState.RACE_NATIVES -> i18n("natives");
+                case CampaignState.RACE_CUSTOM -> String.valueOf(campaign_state.getCustomCampaign());
                 default -> throw new IllegalArgumentException("invalid race");
             };
             String difficulty = switch (campaign_state.getDifficulty()) {

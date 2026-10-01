@@ -329,6 +329,11 @@ public abstract class AI implements Animated {
         sleep_time = owner.getWorld().getRandom().nextFloat() * SLEEP_SECONDS + MIN_SLEEP_SECONDS;
     }
 
+    /** Stops deciding for the player, as when another AI takes over. */
+    public final void stop() {
+        owner.getWorld().getAnimationManagerRealTime().removeAnimation(this);
+    }
+
     protected final boolean shouldDoAction(float time) {
         sleep_time -= time;
         if (!Globals.run_ai || sleep_time >= 0)
