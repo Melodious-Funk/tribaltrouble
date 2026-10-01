@@ -828,8 +828,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             @NonNull CameraState state, @NonNull MatrixStack model_view, @NonNull MatrixStack projection) {
         access.render(Renderer.getRenderer().getRenderContext(), renderer, state);
         // The campaign's markers stay while windows are open, so a trigger's areas show beside its window.
+        // Picking an area shows the brush, the size a click on open ground adds.
         boolean show_brush = has_cursor && !map_mode && getGUIRoot().getModalDelegate() == null
-                && (campaign == null || !campaign.isPicking());
+                && (campaign == null || !campaign.isPicking() || campaign.isPickingArea());
         if (!show_brush && campaign == null)
             return;
         // The water reflection is drawn from a camera mirrored below the sea; the brush has no place in it.
@@ -861,6 +862,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         map_mode = true;
         has_cursor = false;
         toolbar.remove();
+        if (campaign_bar != null)
+            campaign_bar.remove();
         setFocus();
         game_camera.disable();
         setCamera(new MapCamera(this, game_camera));
@@ -876,10 +879,21 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         setCamera(game_camera);
         game_camera.enable();
         addChild(toolbar);
+        if (campaign_bar != null)
+            addChild(campaign_bar);
     }
 
-    private void openMenu() {
+    @Override
+    public void focusEditor() {
+        setFocus();
+    }
+
+    @Override
+    public void openMenu() {
         cancelStroke();
+        // The trigger windows a pick put away come back first; the menu goes on top of them.
+        if (campaign != null)
+            campaign.cancelPick();
         // Keep the keyboard on the editor once the menu closes, not on a toolbar button.
         setFocus();
         if (getGUIRoot().getModalDelegate() != null)

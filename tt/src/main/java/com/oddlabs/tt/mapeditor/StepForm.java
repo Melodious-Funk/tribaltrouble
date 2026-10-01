@@ -16,6 +16,7 @@ import com.oddlabs.tt.gui.OKButton;
 import com.oddlabs.tt.gui.PulldownButton;
 import com.oddlabs.tt.gui.PulldownItem;
 import com.oddlabs.tt.gui.PulldownMenu;
+import com.oddlabs.tt.gui.ScrollablePulldownMenu;
 import com.oddlabs.tt.gui.Skin;
 import org.jspecify.annotations.NonNull;
 
@@ -38,6 +39,8 @@ final class StepForm extends Form {
     private static final int CONTROL_WIDTH = 300;
     private static final int BUTTON_WIDTH = 100;
     private static final int PICK_WIDTH = 110;
+    /** Dropdowns longer than this scroll, so they stay on the screen. */
+    private static final int MAX_SHOWN_ITEMS = 12;
 
     private final @NonNull GUIRoot gui_root;
     private final @NonNull CampaignTools tools;
@@ -66,7 +69,7 @@ final class StepForm extends Form {
         this.done = done;
         Scenario scenario = tools.getScenario();
 
-        menu_kind = new PulldownMenu<>();
+        menu_kind = newMenu(condition ? ConditionKind.values().length : ActionKind.values().length);
         String help_key;
         Param[] params;
         if (condition) {
@@ -117,7 +120,7 @@ final class StepForm extends Form {
         String caption = param.getCaption();
         String[] choices = param.getChoices();
         if (choices != null) {
-            PulldownMenu<Integer> menu = new PulldownMenu<>();
+            PulldownMenu<Integer> menu = newMenu(choices.length);
             for (int i = 0; i < choices.length; i++)
                 menu.addItem(new PulldownItem<>(choices[i], i));
             rows.add(caption, pulldown(menu, draft.get(param)));
@@ -137,7 +140,7 @@ final class StepForm extends Form {
                 controls.put(param, menu);
             }
             case AREA -> {
-                PulldownMenu<Integer> menu = new PulldownMenu<>();
+                PulldownMenu<Integer> menu = newMenu(scenario.areas.size() + 1);
                 menu.addItem(new PulldownItem<>(CampaignEditor.i18n("none"), -1));
                 int chosen = 0;
                 for (Scenario.Area area : scenario.areas) {
@@ -155,7 +158,7 @@ final class StepForm extends Form {
                 rows.add(caption, label, pickButton(param));
             }
             case TRIGGER -> {
-                PulldownMenu<Integer> menu = new PulldownMenu<>();
+                PulldownMenu<Integer> menu = newMenu(scenario.triggers.size() + 1);
                 menu.addItem(new PulldownItem<>(CampaignEditor.i18n("none"), -1));
                 int chosen = 0;
                 for (Scenario.Trigger trigger : scenario.triggers) {
@@ -184,6 +187,11 @@ final class StepForm extends Form {
                 controls.put(param, line);
             }
         }
+    }
+
+    /** A dropdown for so many items, scrolling when it would be too tall for the screen. */
+    private static @NonNull PulldownMenu<Integer> newMenu(int items) {
+        return items > MAX_SHOWN_ITEMS ? new ScrollablePulldownMenu<>(MAX_SHOWN_ITEMS) : new PulldownMenu<>();
     }
 
     private @NonNull PulldownButton<Integer> pulldown(@NonNull PulldownMenu<Integer> menu, int value) {
@@ -247,8 +255,15 @@ final class StepForm extends Form {
         reopen();
     }
 
+    /** Opens the window again for the draft, centred where this one was, as its size may change. */
     private void reopen() {
-        gui_root.addModalForm(new StepForm(gui_root, tools, condition, draft, parents, done));
+        int centre_x = getX() + getWidth() / 2;
+        int centre_y = getY() + getHeight() / 2;
+        StepForm form = new StepForm(gui_root, tools, condition, draft, parents, done);
+        form.setPos(Math.clamp(centre_x - form.getWidth() / 2, 0, Math.max(0, gui_root.getWidth() - form.getWidth())),
+                Math.clamp(centre_y - form.getHeight() / 2, 0, Math.max(0,
+                        gui_root.getHeight() - form.getHeight())));
+        gui_root.addModalForm(form);
     }
 
     private void pick(@NonNull Param param) {

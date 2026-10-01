@@ -282,6 +282,8 @@ final class Scenario {
         String[] choices = param.getChoices();
         if (choices != null)
             return choices[Math.clamp(value, 0, choices.length - 1)];
+        if (value == -1 && (param == Param.AREA || param == Param.OBJECT || param == Param.TRIGGER))
+            return CampaignEditor.i18n("none");
         return switch (param) {
             case PLAYER, TARGET_PLAYER, NEW_OWNER -> playerName(value);
             case AREA -> {

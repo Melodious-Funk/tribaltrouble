@@ -48,6 +48,12 @@ final class CampaignTools {
         /** The hint line should be written again. */
         void refreshLabels();
 
+        /** Opens the editor's Escape menu. */
+        void openMenu();
+
+        /** Gives the keyboard back to the editor, after a click on the bar. */
+        void focusEditor();
+
         float getRadius();
 
         /** The brush intensity, 0 to 1. */
@@ -129,7 +135,8 @@ final class CampaignTools {
         Form bar = new Form() {
             @Override
             public void cancel() {
-                // Escape on the bar is the editor's, as on its toolbar.
+                // Escape on the bar opens the editor's menu, as on its toolbar.
+                host.openMenu();
             }
         };
         RadioButton radio = new RadioButton(false, tools, CampaignEditor.i18n("tool_campaign"));
@@ -156,18 +163,25 @@ final class CampaignTools {
             player = chosen != null ? chosen : 0;
             colourPlayer();
             host.refreshLabels();
+            host.focusEditor();
         });
         colourPlayer();
 
         HorizButton button_players = new HorizButton(CampaignEditor.i18n("players"), BUTTON_WIDTH);
-        button_players.addMouseClickListener((_, _, _, _) -> gui_root.addModalForm(new PlayersForm(gui_root,
-                layer, host::refreshLabels)));
+        button_players.addMouseClickListener((_, _, _, _) -> {
+            cancelPick();
+            gui_root.addModalForm(new PlayersForm(gui_root, layer, host::refreshLabels));
+        });
         HorizButton button_triggers = new HorizButton(CampaignEditor.i18n("triggers"), BUTTON_WIDTH);
-        button_triggers.addMouseClickListener((_, _, _, _) -> gui_root.addModalForm(new TriggersForm(gui_root,
-                this)));
+        button_triggers.addMouseClickListener((_, _, _, _) -> {
+            cancelPick();
+            gui_root.addModalForm(new TriggersForm(gui_root, this));
+        });
         HorizButton button_level = new HorizButton(CampaignEditor.i18n("level"), BUTTON_WIDTH);
-        button_level.addMouseClickListener((_, _, _, _) -> gui_root.addModalForm(new LevelForm(layer,
-                host::refreshLabels)));
+        button_level.addMouseClickListener((_, _, _, _) -> {
+            cancelPick();
+            gui_root.addModalForm(new LevelForm(layer, host::refreshLabels));
+        });
 
         bar.addChild(radio);
         bar.addChild(pulldown_tool);
@@ -356,6 +370,11 @@ final class CampaignTools {
 
     boolean isPicking() {
         return picking != null;
+    }
+
+    /** Whether an area is being picked, where a click on open ground adds one the size of the brush. */
+    boolean isPickingArea() {
+        return picking == Param.AREA;
     }
 
     /**
