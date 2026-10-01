@@ -74,8 +74,6 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final int MIN_INTENSITY = 0;
     /** Seconds between resource brush dabs while the button is held. */
     private static final float RESOURCE_DAB_INTERVAL = .05f;
-    /** Marks a terrain stroke in the undo history; the terrain editor keeps what it changed. */
-    private static final Object TERRAIN_STEP = new Object();
     private static final int MAX_INTENSITY = 100;
     private static final int INTENSITY_STEP = 5;
     private static final int LABEL_WIDTH = 150;
@@ -91,9 +89,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final @NonNull TerrainEditor editor;
     private final @Nullable GroundTextures ground;
     private static final float ACCESS_UPDATE_INTERVAL = .25f;
+    private final @NonNull AccessMap access_map;
     private final @NonNull AccessOverlay access;
     private final @NonNull Label label_access_legend;
-    // Seconds since the playable area overlay last followed a stroke in progress.
+    // Seconds since the playable area last followed a stroke in progress.
     private float access_timer;
     // Seconds since the ground texture last followed a stroke in progress.
     private float ground_timer;
@@ -104,6 +103,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // Terrain steps and resource strokes, newest first, so undo takes them back in the order they were made.
     private final Deque<Object> history = new ArrayDeque<>();
     private ResourceLayer.@Nullable Stroke resource_stroke;
+    // Resources the latest terrain edit left off the playable area; kept with it in the history until the next edit
+    // or an undo, as the playable area catches up with an edit after the stroke ends.
+    private ResourceLayer.@Nullable Stroke pruned;
     private float resource_timer;
     // Whether the resources differ from the generated ones, and whether they changed since the last save.
     private boolean resources_edited;
@@ -148,7 +150,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
-            @NonNull AccessOverlay access, @NonNull ResourceLayer layer, @NonNull MapSettings settings,
+            @NonNull AccessMap access_map, @NonNull AccessOverlay access, @NonNull ResourceLayer layer, @NonNull MapSettings settings,
             @Nullable String map_name, boolean edited, boolean resources_edited) {
         super(gui_root, null);
         this.network = network;
@@ -157,6 +159,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.picker = picker;
         this.editor = editor;
         this.ground = ground;
+        this.access_map = access_map;
         this.access = access;
         this.settings = settings;
         this.map_name = map_name;
@@ -295,6 +298,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         float maxZ() {
             return getMaxZ();
         }
+    }
+
+    /**
+     * A terrain stroke in the undo history, with the resources it left off the playable area. The terrain editor
+     * keeps what it changed in the heights.
+     */
+    private record TerrainStep(ResourceLayer.@NonNull Stroke pruned) {
     }
 
     /** The toolbar looks like a window but Escape on it opens the editor menu instead of closing it. */
@@ -441,13 +451,27 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             return;
         }
         random_seed = random.nextInt();
-        editor.beginStroke();
+        beginTerrainStroke();
     }
 
     private void remember(@NonNull Object step) {
         history.push(step);
         while (history.size() > TerrainEditor.MAX_UNDO_STEPS)
             history.removeLast();
+    }
+
+    private void beginTerrainStroke() {
+        pruned = new ResourceLayer.Stroke();
+        editor.beginStroke();
+    }
+
+    /** Ends the terrain editor's stroke and, if it changed anything, records it to undo. */
+    private void finishTerrainStroke() {
+        ResourceLayer.Stroke stroke = pruned;
+        if (editor.endStroke() && stroke != null)
+            remember(new TerrainStep(stroke));
+        else
+            pruned = null;
     }
 
     private void finishResourceStroke() {
@@ -476,13 +500,24 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
     }
 
-    /** Brings the playable area overlay after the heights: now and then while painting, at once otherwise. */
+    /**
+     * Brings the playable area after the heights, now and then while painting and at once otherwise, takes away the
+     * resources an edit left off it, and brings the overlay after it.
+     */
     private void updateAccess(float t) {
         access_timer += t;
-        if (access.needsUpdate() && (stroke_sign == 0 || access_timer >= ACCESS_UPDATE_INTERVAL)) {
+        if (access_map.isStale() && (stroke_sign == 0 || access_timer >= ACCESS_UPDATE_INTERVAL)) {
             access_timer = 0f;
-            access.update(Renderer.getRenderer().getRenderContext());
+            access_map.compute();
+            access.mapChanged();
+            // Units could no longer reach them. Undoing the edit brings them back.
+            if (layer.prune(pruned != null ? pruned : new ResourceLayer.Stroke())) {
+                resources_edited = true;
+                resources_modified = true;
+                ground_settle = true;
+            }
         }
+        access.update(Renderer.getRenderer().getRenderContext());
     }
 
     private void endStroke() {
@@ -497,14 +532,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 float ay = toGrid(ramp_y);
                 float bx = toGrid(cursor_x);
                 float by = toGrid(cursor_y);
-                editor.beginStroke();
+                beginTerrainStroke();
                 editor.applyRamp(ax, ay, editor.getHeight(ax, ay), bx, by, editor.getHeight(bx, by), toGrid(radius),
                         intensity / 100f, stroke_sign);
-                if (editor.endStroke())
-                    remember(TERRAIN_STEP);
+                finishTerrainStroke();
             }
-        } else if (editor.endStroke()) {
-            remember(TERRAIN_STEP);
+        } else {
+            finishTerrainStroke();
         }
         stroke_sign = 0;
     }
@@ -515,8 +549,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             finishResourceStroke();
             ground_settle = true;
         } else if (stroke_sign != 0 && !brush.isDragShape()) {
-            if (editor.endStroke())
-                remember(TERRAIN_STEP);
+            finishTerrainStroke();
             ground_settle = true;
         }
         stroke_sign = 0;
@@ -555,10 +588,17 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         cancelStroke();
         ground_settle = true;
         Object step = history.poll();
+        pruned = null;
         if (step instanceof ResourceLayer.Stroke stroke) {
             layer.undo(stroke);
             resources_modified = true;
-        } else if (step == null || !editor.undo()) {
+        } else if (step instanceof TerrainStep terrain && editor.undo()) {
+            // Their cells rejoin the playable area with the heights, so they are not pruned again.
+            if (!terrain.pruned().isEmpty()) {
+                layer.undo(terrain.pruned());
+                resources_modified = true;
+            }
+        } else {
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("nothing_to_undo"));
         }
     }

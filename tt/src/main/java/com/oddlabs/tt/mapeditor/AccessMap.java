@@ -2,6 +2,7 @@ package com.oddlabs.tt.mapeditor;
 
 import com.oddlabs.tt.global.Globals;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Sorts the island's cells the way the generator decides where units can go, which is the region players start in
@@ -31,12 +32,15 @@ final class AccessMap {
     private final boolean archipelago;
 
     private final @NonNull Kind @NonNull [] kinds;
+    // The kinds as of the compute before the last, to tell which cells an edit took out of the playable region.
+    private final @Nullable Kind @NonNull [] previous;
     private final boolean @NonNull [] accessible;
     private final boolean @NonNull [] steep;
     private final boolean @NonNull [] land;
     private final float @NonNull [] normalized;
     private final int @NonNull [] component;
     private final int @NonNull [] queue;
+    private boolean stale;
 
     AccessMap(float @NonNull [] @NonNull [] heights, @NonNull MapSettings settings) {
         this.heights = heights;
@@ -45,12 +49,16 @@ final class AccessMap {
         this.access_threshold = settings.getAccessThreshold();
         this.archipelago = settings.isArchipelago();
         this.kinds = new Kind[size * size];
+        this.previous = new Kind[size * size];
         this.accessible = new boolean[size * size];
         this.steep = new boolean[size * size];
         this.land = new boolean[size * size];
         this.normalized = new float[size * size];
         this.component = new int[size * size];
         this.queue = new int[size * size];
+        compute();
+        // Nothing was lost before the first edit.
+        System.arraycopy(kinds, 0, previous, 0, kinds.length);
     }
 
     int getSize() {
@@ -62,8 +70,25 @@ final class AccessMap {
         return kinds[y * size + x];
     }
 
+    /** Whether a cell left the playable region between the compute before the last and the last. */
+    boolean leftRegion(int x, int y) {
+        int i = y * size + x;
+        return previous[i] == Kind.REGION && kinds[i] != Kind.REGION;
+    }
+
+    /** Notes that heights changed, so the cells must be sorted again. */
+    void heightsChanged() {
+        stale = true;
+    }
+
+    boolean isStale() {
+        return stale;
+    }
+
     /** Sorts every cell from the current heights. */
     void compute() {
+        stale = false;
+        System.arraycopy(kinds, 0, previous, 0, kinds.length);
         for (int y = 0; y < size; y++) {
             float[] row = heights[y];
             for (int x = 0; x < size; x++)

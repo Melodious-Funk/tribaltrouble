@@ -128,22 +128,16 @@ final class AccessOverlay implements AutoCloseable {
         this.visible = visible;
     }
 
-    /** Notes that heights changed; connections can change anywhere, so the whole overlay is redone. */
-    void heightsChanged() {
+    /** Notes that the map was sorted again; connections can change anywhere, so the whole overlay is redone. */
+    void mapChanged() {
         stale = true;
     }
 
-    /** Whether the overlay is shown and behind the heights. */
-    boolean needsUpdate() {
-        return visible && stale && !closed;
-    }
-
-    /** Sorts the cells again and uploads the tints. */
+    /** Uploads the tints if the overlay is shown and behind the map. */
     void update(@NonNull RenderContext context) {
-        if (!needsUpdate())
+        if (!visible || !stale || closed)
             return;
         stale = false;
-        map.compute();
         IntBuffer texels = upload.clear().asIntBuffer();
         for (int y = 0; y < size; y++) {
             for (int x = 0; x < size; x++) {

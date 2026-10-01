@@ -1,6 +1,5 @@
 package com.oddlabs.tt.mapeditor;
 
-import com.oddlabs.tt.global.Globals;
 import com.oddlabs.tt.landscape.AbstractTreeGroup;
 import com.oddlabs.tt.landscape.HeightMap;
 import com.oddlabs.tt.landscape.TreeGroup;
@@ -29,8 +28,8 @@ import java.util.List;
 /**
  * The trees, rocks and iron on the island, by grid cell, and painting them with a brush.
  *
- * <p>Resources go where the generator would put them: on ground units can walk (a slope within the island's
- * threshold, above the sea, off the map edge) and apart from each other as the generator keeps them, which leaves
+ * <p>Resources go where the generator would put them: on the playable region of {@link AccessMap} and apart from
+ * each other as the generator keeps them, which leaves
  * a resource's four neighbours clear of every other resource's surrounding cells. Density thins them further by
  * keeping resources of one kind a distance apart that grows as density drops, so the count under the brush goes
  * with the density; at zero only the one nearest the brush centre is placed.
@@ -59,10 +58,8 @@ final class ResourceLayer {
     }
 
     private final @NonNull World world;
-    private final float @NonNull [] @NonNull [] heights;
+    private final @NonNull AccessMap access;
     private final int size;
-    private final float height_scale;
-    private final float access_threshold;
     private final Landscape.@NonNull TerrainType terrain;
     private final @NonNull ChangeListener listener;
 
@@ -75,16 +72,11 @@ final class ResourceLayer {
 
     private boolean trees_changed;
 
-    /**
-     * @param heights the array the height map was built from
-     */
-    ResourceLayer(@NonNull World world, float @NonNull [] @NonNull [] heights, @NonNull MapSettings settings,
+    ResourceLayer(@NonNull World world, @NonNull AccessMap access, @NonNull MapSettings settings,
             @NonNull ChangeListener listener) {
         this.world = world;
-        this.heights = heights;
-        this.size = heights.length;
-        this.height_scale = settings.getHeightScale();
-        this.access_threshold = settings.getAccessThreshold();
+        this.access = access;
+        this.size = access.getSize();
         this.terrain = Landscape.TerrainType.values()[settings.terrain()];
         this.listener = listener;
         this.kinds = new Resource[size * size];
@@ -228,6 +220,28 @@ final class ResourceLayer {
         finish();
     }
 
+    /**
+     * Removes every resource on a cell the last {@link AccessMap#compute} took out of the playable region, where
+     * units can no longer get to it.
+     *
+     * @return whether any was removed
+     */
+    boolean prune(@NonNull Stroke stroke) {
+        int removed = stroke.removed.size();
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                Resource found = kinds[y * size + x];
+                if (found != null && access.leftRegion(x, y)) {
+                    remove(x, y);
+                    stroke.removed.add(new int[]{found.ordinal(), x, y});
+                    changed(x, y);
+                }
+            }
+        }
+        finish();
+        return stroke.removed.size() > removed;
+    }
+
     private int @NonNull [] diskCells(int r) {
         if (r != disk_radius) {
             List<int[]> offsets = new ArrayList<>();
@@ -250,20 +264,12 @@ final class ResourceLayer {
         return x > 0 && y > 0 && x < size - 1 && y < size - 1;
     }
 
-    /** Walkable ground with room to spare, as the generator places resources. */
+    /** Playable ground with room to spare, as the generator places resources. */
     private boolean canPlace(int x, int y) {
         if (!inside(x, y) || kinds[y * size + x] != null || world.getUnitGrid().isGridOccupied(x, y))
             return false;
-        // Landscape.generateThresholdMap: slope within the threshold and above the sea.
-        float h = heights[y][x] / height_scale;
-        if (h <= Globals.SEA_LEVEL)
-            return false;
-        float slope = Math.max(
-                Math.max(Math.abs(h - heights[y][x - 1] / height_scale),
-                        Math.abs(h - heights[y][x + 1] / height_scale)),
-                Math.max(Math.abs(h - heights[y - 1][x] / height_scale),
-                        Math.abs(h - heights[y + 1][x] / height_scale)));
-        if (slope > access_threshold)
+        // Landscape.placeSupplies places them only on the playable region.
+        if (access.get(x, y) != AccessMap.Kind.REGION)
             return false;
         // Landscape.placeSupplies: the cell and its four neighbours are free of every resource's surroundings,
         // which keeps other resources out of the 5x5 square around it less its corners.
