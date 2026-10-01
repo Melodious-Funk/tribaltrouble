@@ -62,6 +62,7 @@ import java.math.BigInteger;
 import java.util.Random;
 import java.util.ResourceBundle;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
 import static com.oddlabs.tt.gui.Placement.BOTTOM_RIGHT;
@@ -372,12 +373,20 @@ public final class TerrainMenu extends Group {
         button_cancel.addMouseClickListener(new CancelButtonListener());
         HorizButton button_mapcode = new HorizButton(i18n("enter_map_code"), 170);
         button_mapcode.addMouseClickListener(new MapcodeListener());
-        // A saved map's file is read where the game is generated, so only a single player game can use one.
+        // A multiplayer game plays a map shared on the server, which the players joining download.
         HorizButton button_custom = new HorizButton(i18n("custom_map"), 170);
-        button_custom.addMouseClickListener((_, _, _, _) -> MapEditor.chooseMapToPlay(gui_root, custom -> {
-            if (startGame(custom))
-                button_ok.setDisabled(true);
-        }));
+        button_custom.addMouseClickListener((_, _, _, _) -> {
+            Consumer<CustomMap> start = custom -> {
+                if (startGame(custom))
+                    button_ok.setDisabled(true);
+            };
+            if (!multiplayer)
+                MapEditor.chooseMapToPlay(gui_root, start);
+            else if (cb_rated.isMarked())
+                gui_root.addModalForm(new MessageForm(MapEditor.i18n("custom_map_rated")));
+            else
+                MapEditor.chooseMapToHost(gui_root, start);
+        });
         button_advanced = new HorizButton(i18n("advanced"), 130);
         button_advanced.addMouseClickListener((_, _, _, _) -> gui_root.addModalForm(new AdvancedSettingsForm(
                 advanced_settings, Globals.SHIPS_ENABLED,
@@ -393,10 +402,8 @@ public final class TerrainMenu extends Group {
         button_cancel.place();
         button_ok.place(button_cancel, LEFT_MID);
         button_mapcode.place(button_ok, LEFT_MID);
-        if (!multiplayer) {
-            group_buttons.addChild(button_custom);
-            button_custom.place(button_mapcode, LEFT_MID);
-        }
+        group_buttons.addChild(button_custom);
+        button_custom.place(button_mapcode, LEFT_MID);
 
         group_buttons.compileCanvas();
         addChild(group_buttons);
@@ -805,7 +812,8 @@ public final class TerrainMenu extends Group {
         int supplies_amount = slider_supplies.getValue();
         Landscape.TerrainType terrain_type = Landscape.TerrainType.values()[pm_terrain_type.getChosenItemIndex()];
         Game game;
-        boolean rated = cb_rated.isMarked();
+        // Custom maps are never rated: they may well favour one side.
+        boolean rated = cb_rated.isMarked() && custom == null;
         if (rated)
             team_pulldown_menus[0].chooseItem(team_pulldown_menus[0].getChosenItemIndex() % 2);
         AdvancedSettingsForm.Values settings = rated ? AdvancedSettingsForm.Values.defaults() : advanced_settings;
@@ -822,23 +830,26 @@ public final class TerrainMenu extends Group {
             }
             float random_start_pos = LocalEventQueue.getQueue().getTime() % 1f;
             // spotless:off
-            game = Game.builder()
+            Game.Builder builder = Game.builder()
                     .name(game_name)
                     .size((byte) size)
-                    .terrain((byte) terrain_type.ordinal())
-                    .hills((byte) hills)
-                    .trees((byte) vegetation_amount)
-                    .supplies((byte) supplies_amount)
+                    .terrain((byte) (custom != null ? custom.getTerrain() : terrain_type.ordinal()))
+                    .hills((byte) (custom != null ? custom.getHills() : hills))
+                    .trees((byte) (custom != null ? custom.getTrees() : vegetation_amount))
+                    .supplies((byte) (custom != null ? custom.getSupplies() : supplies_amount))
                     .rated(rated)
                     .gamespeed((byte) (pm_gamespeed.getChosenItemIndex() + 1))
-                    .mapcode(label_mapcode.getContents())
+                    .mapcode(mapcode)
                     .randomStartPos(random_start_pos)
                     .maxUnitCount(settings.maxUnits())
                     .initialUnitCount(settings.startingUnits())
                     .maxBuildingCount(settings.maxBuildings())
-                    .ships(ships)
-                    .build();
+                    .ships(ships);
             // spotless:on
+            String shared_hash = custom != null ? custom.getSharedHash() : null;
+            if (shared_hash != null)
+                builder.customMap(shared_hash, custom.getName());
+            game = builder.build();
         } else {
             boolean has_enemy = false;
             for (int i = 1; i < player_count; i++) {

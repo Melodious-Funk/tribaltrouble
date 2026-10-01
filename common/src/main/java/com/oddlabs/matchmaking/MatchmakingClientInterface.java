@@ -69,4 +69,24 @@ public interface MatchmakingClientInterface {
     void receiveSpectatorData(byte[] world_params_data);
 
     void receiveSpectatorEventLog(byte[] chunk, int chunk_index, int total_chunks, int current_tick);
+
+    /** The server took the chunks of the map being uploaded up to, but not including, this one. */
+    void mapUploadProgress(String hash, int chunks_received);
+
+    /** The server has the uploaded map, now listed. */
+    void mapUploaded(SharedMap map);
+
+    /** The server refused the map being uploaded, with one of the {@code SharedMap.ERROR_} codes. */
+    void mapUploadFailed(String hash, int error_code);
+
+    void receiveMapChunk(String hash, int chunk_index, int total_chunks, byte[] data);
+
+    /** The server has no map by that hash, or could not read it. */
+    void mapDownloadFailed(String hash);
+
+    /**
+     * One chunk of a shared map's preview picture: gzipped rows of three bytes per pixel, from south to north. A
+     * map without a preview is answered with one empty chunk and a size of 0.
+     */
+    void receiveMapPreview(String hash, int size, int chunk_index, int total_chunks, byte[] gzipped_rgb);
 }

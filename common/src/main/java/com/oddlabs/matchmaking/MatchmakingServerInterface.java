@@ -10,6 +10,7 @@ public interface MatchmakingServerInterface {
     int TYPE_RANKING_LIST = 3;
     int TYPE_OPENSKILL_RANKING_LIST = 4;
     int TYPE_OPENSKILL_PERSONAL_RANKING = 5;
+    int TYPE_MAP_LIST = 6;
 
     int MATCHMAKING_SERVER_PORT = 33214;
 
@@ -79,4 +80,23 @@ public interface MatchmakingServerInterface {
     void updateWorldParams(byte[] world_params_data);
 
     void requestSpectatorEventLog();
+
+    /**
+     * Starts uploading a map file, named by its SHA-256 in lower case hex. The server answers with
+     * {@link MatchmakingClientInterface#mapUploaded} at once when it already has the file, else with
+     * {@link MatchmakingClientInterface#mapUploadProgress} for each chunk it takes.
+     */
+    void beginMapUpload(String name, String hash, int file_size);
+
+    /** Sends the next {@link SharedMap#CHUNK_SIZE} bytes of the map being uploaded, in order from chunk 0. */
+    void uploadMapChunk(int chunk_index, byte[] data);
+
+    /** Asks for one chunk of a shared map's file, answered with a chunk or a failed download. */
+    void requestMapChunk(String hash, int chunk_index);
+
+    /** Asks for a shared map's preview picture. */
+    void requestMapPreview(String hash);
+
+    /** Takes a shared map off the server; only the profile that uploaded it may. */
+    void deleteMap(String hash);
 }

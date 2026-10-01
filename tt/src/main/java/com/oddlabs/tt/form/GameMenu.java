@@ -28,6 +28,9 @@ import com.oddlabs.tt.gui.TextBox;
 import com.oddlabs.tt.guievent.EnterListener;
 import com.oddlabs.tt.guievent.ItemChosenListener;
 import com.oddlabs.tt.guievent.MouseClickListener;
+import com.oddlabs.tt.mapeditor.MapEditor;
+import com.oddlabs.tt.mapeditor.SharedMapView;
+import com.oddlabs.tt.mapeditor.SharedMaps;
 import com.oddlabs.tt.model.RacesResources;
 import com.oddlabs.tt.net.ChatCommand;
 import com.oddlabs.tt.net.ChatListener;
@@ -97,6 +100,8 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
 
     private boolean updating;
     private boolean ready;
+    // Whether the game's map is here to play; a shared map the player lacks is downloaded first.
+    private boolean map_ready = true;
 
     @SuppressWarnings("unchecked")
     public GameMenu(@NonNull GameNetwork game_network, GUIRoot gui_root, SelectGameMenu owner, @NonNull Game game,
@@ -175,6 +180,24 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
         ready_button.place(cancel_button, LEFT_MID);
         if (local_player_slot == 0)
             start_button.place(ready_button, LEFT_MID);
+        String map_hash = game.getCustomMapHash();
+        if (map_hash != null) {
+            // Beside the players, in the room above the chat.
+            int room = game_name_label.getHeight() + fdata.objectSpacing() + player_group.getHeight();
+            SharedMapView map_view = new SharedMapView(Math.min(160, SharedMapView.previewSizeFor(room)));
+            addChild(map_view);
+            map_view.place(chat_info, TOP_RIGHT);
+            String map_name = game.getCustomMapName();
+            map_view.show(map_hash, map_name != null ? map_name : "", game.getSize(), game.getTerrainType());
+            map_ready = SharedMaps.isCached(map_hash);
+            if (!map_ready) {
+                ready_button.setDisabled(true);
+                map_view.fetch(() -> {
+                    map_ready = true;
+                    ready_button.setDisabled(ready);
+                });
+            }
+        }
         Font font = Skin.getSkin().getEditFont();
         if (rated) {
             Label rating = new Label(i18n("rating"), font, RATING_WIDTH, Origin.AT_END);
@@ -533,7 +556,7 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
     private void setReady(boolean r) {
         if (r != ready) {
             ready = r;
-            ready_button.setDisabled(ready);
+            ready_button.setDisabled(ready || !map_ready);
             adjustPlayerSlot(local_player_slot);
         }
     }
@@ -572,6 +595,10 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
     private final class ReadyListener implements MouseClickListener {
         @Override
         public void mouseClicked(@NonNull MouseButton button, int x, int y, int clicks) {
+            if (!map_ready) {
+                gui_root.addModalForm(new MessageForm(MapEditor.i18n("map_needed")));
+                return;
+            }
             setReady(true);
         }
     }

@@ -1,14 +1,17 @@
 package com.oddlabs.tt.mapeditor;
 
+import com.oddlabs.matchmaking.MapFileHeader;
 import com.oddlabs.tt.landscape.HeightMap;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -32,8 +35,9 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                @Nullable Resources resources, @Nullable MapPreview preview) {
     static final String EXTENSION = ".ttmap";
 
-    private static final int MAGIC = 0x54_54_4D_50; // "TTMP"
-    private static final int VERSION = 3;
+    // The server reads the start of the file too, in MapFileHeader; keep the two in step.
+    private static final int MAGIC = MapFileHeader.MAGIC;
+    private static final int VERSION = MapFileHeader.VERSION;
 
     /** Grid positions of every resource, one list per kind in {@link Resource} order. */
     record Resources(@NonNull List<int @NonNull []> @NonNull [] positions) {
@@ -80,40 +84,55 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         // Write next to the target and move it into place, so a failed save never leaves half a map behind.
         Path temp = Files.createTempFile(dir, name, ".tmp");
         try {
-            try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(
-                    Files.newOutputStream(temp))))) {
-                out.writeInt(MAGIC);
-                out.writeInt(VERSION);
-                writeSettings(out, settings);
-                out.writeBoolean(heights != null);
-                out.writeBoolean(resources != null);
-                out.writeBoolean(preview != null);
-                if (preview != null) {
-                    out.writeShort(preview.size());
-                    out.write(preview.rgb());
-                }
-                if (heights != null) {
-                    out.writeInt(heights.length);
-                    for (float[] row : heights) {
-                        for (float height : row) {
-                            out.writeFloat(height);
-                        }
-                    }
-                }
-                if (resources != null) {
-                    for (Resource kind : Resource.values()) {
-                        List<int[]> positions = resources.of(kind);
-                        out.writeInt(positions.size());
-                        for (int[] position : positions) {
-                            out.writeShort(position[0]);
-                            out.writeShort(position[1]);
-                        }
-                    }
-                }
+            try (OutputStream out = Files.newOutputStream(temp)) {
+                write(out);
             }
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         } finally {
             Files.deleteIfExists(temp);
+        }
+    }
+
+    /**
+     * The map as its file would hold it. The same map always gives the same bytes, so maps shared with other
+     * players can be known by the hash of them.
+     */
+    byte @NonNull [] toBytes() throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        write(bytes);
+        return bytes.toByteArray();
+    }
+
+    private void write(@NonNull OutputStream stream) throws IOException {
+        try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(stream)))) {
+            out.writeInt(MAGIC);
+            out.writeInt(VERSION);
+            writeSettings(out, settings);
+            out.writeBoolean(heights != null);
+            out.writeBoolean(resources != null);
+            out.writeBoolean(preview != null);
+            if (preview != null) {
+                out.writeShort(preview.size());
+                out.write(preview.rgb());
+            }
+            if (heights != null) {
+                out.writeInt(heights.length);
+                for (float[] row : heights) {
+                    for (float height : row) {
+                        out.writeFloat(height);
+                    }
+                }
+            }
+            if (resources != null) {
+                for (Resource kind : Resource.values()) {
+                    List<int[]> positions = resources.of(kind);
+                    out.writeInt(positions.size());
+                    for (int[] position : positions) {
+                        out.writeShort(position[0]);
+                        out.writeShort(position[1]);
+                    }
+                }
+            }
         }
     }
 

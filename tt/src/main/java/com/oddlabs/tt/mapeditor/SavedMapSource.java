@@ -23,7 +23,11 @@ final class SavedMapSource implements LandscapeOverride.Source {
 
     @Override
     public @NonNull LandscapeOverride load() throws IOException {
-        MapFile map = MapFile.load(Path.of(path));
+        return override(MapFile.load(Path.of(path)));
+    }
+
+    /** The heights and resources a map builds its island with. */
+    static @NonNull LandscapeOverride override(@NonNull MapFile map) {
         MapFile.Resources resources = map.resources();
         return new LandscapeOverride(map.heights(), resources == null ? null : new LandscapeOverride.Resources(
                 resources.of(Resource.TREE), resources.of(Resource.PALM), resources.of(Resource.ROCK),

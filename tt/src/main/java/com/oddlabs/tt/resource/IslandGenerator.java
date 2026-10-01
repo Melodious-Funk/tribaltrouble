@@ -72,6 +72,11 @@ public final class IslandGenerator implements WorldGenerator {
         return texels_per_grid_unit;
     }
 
+    /** Where the island's saved heights and resources come from, or null when it is all generated. */
+    public LandscapeOverride.@Nullable Source getOverride() {
+        return override;
+    }
+
     @Override
     public Landscape.@NonNull TerrainType getTerrainType() {
         return terrain;

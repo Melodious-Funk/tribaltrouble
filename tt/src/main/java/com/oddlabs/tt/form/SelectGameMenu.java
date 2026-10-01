@@ -49,6 +49,7 @@ import com.oddlabs.tt.guievent.FocusListener;
 import com.oddlabs.tt.guievent.ItemChosenListener;
 import com.oddlabs.tt.guievent.MouseClickListener;
 import com.oddlabs.tt.guievent.RowListener;
+import com.oddlabs.tt.mapeditor.MapBrowserPanel;
 import com.oddlabs.tt.net.ChatCommand;
 import com.oddlabs.tt.net.GameNetwork;
 import com.oddlabs.tt.net.MatchmakingListener;
@@ -68,10 +69,11 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
     private static final int PANEL_INDEX_GAME = 0;
     private static final int PANEL_INDEX_CHAT = 1;
     private static final int PANEL_INDEX_HIGHSCORE = 2;
+    private static final int PANEL_INDEX_MAPS = 3;
 
     private final @NonNull Menu main_menu;
     private final @NonNull ProfilesForm profiles_form;
-    private final Panel[] panels = new Panel[3];
+    private final Panel[] panels = new Panel[4];
 
     // List of games
     private final @NonNull Panel game_list_panel;
@@ -87,6 +89,7 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
 
     private final @NonNull MultiColumnComboBox<RankingEntry> ranking_list_box;
     private final @NonNull OpenSkillLeaderboard openskill_leaderboard;
+    private final @NonNull MapBrowserPanel map_browser;
 
     private final int game_name_size;
     private final int user_name_size;
@@ -248,6 +251,10 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         create_button.place(update_list_button, RIGHT_MID);
         join_button.place(create_button, RIGHT_MID);
         chat_room_list_panel.compileCanvas();
+
+        // Shared maps panel
+        map_browser = new MapBrowserPanel(gui_root, 350);
+        panels[PANEL_INDEX_MAPS] = map_browser;
 
         // Common
         ChatRoomInfo info = Network.getMatchmakingClient().getChatRoomInfo();
@@ -423,6 +430,9 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
                 }
                 openskill_leaderboard.setPersonalEntry(entry);
                 break;
+            case MatchmakingServerInterface.TYPE_MAP_LIST:
+                map_browser.add(names);
+                break;
             default:
                 throw new IllegalArgumentException("Unexpected list type " + type);
         }
@@ -447,6 +457,9 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
                 break;
             case MatchmakingServerInterface.TYPE_OPENSKILL_PERSONAL_RANKING:
                 openskill_leaderboard.setPersonalEntry(null);
+                break;
+            case MatchmakingServerInterface.TYPE_MAP_LIST:
+                map_browser.clear();
                 break;
             default:
                 throw new IllegalArgumentException("Unexpected list type " + type);

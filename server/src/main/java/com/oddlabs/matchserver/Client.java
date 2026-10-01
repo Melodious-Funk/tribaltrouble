@@ -1,7 +1,9 @@
 package com.oddlabs.matchserver;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -22,6 +24,7 @@ import com.oddlabs.matchmaking.MatchmakingServerInterface;
 import com.oddlabs.matchmaking.OpenSkillLeaderboardRankingEntry;
 import com.oddlabs.matchmaking.Participant;
 import com.oddlabs.matchmaking.Profile;
+import com.oddlabs.matchmaking.SharedMap;
 import com.oddlabs.matchserver.discord.DiscordBotService;
 import com.oddlabs.matchserver.discord.commands.RegisterProfileToDiscordUserCommand;
 import com.oddlabs.net.ARMIEvent;
@@ -62,6 +65,16 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
     private TimestampedGameSession current_session;
     private TimestampedGameSession spectated_session;
     private @Nullable ChatRoom current_room;
+    private @Nullable MapUpload map_upload;
+
+    /** A map file coming in, chunk by chunk. */
+    private record MapUpload(@NonNull String name, @NonNull String hash, int file_size,
+                             @NonNull ByteArrayOutputStream data) {
+        // Every chunk but the last is whole.
+        int nextChunk() {
+            return data.size() / SharedMap.CHUNK_SIZE;
+        }
+    }
 
     public Client(@NonNull MatchmakingServer server, AbstractConnection conn, InetAddress remote_address,
             InetAddress local_remote_address, String username, boolean guest, int revision, int sim_version,
@@ -457,6 +470,9 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
             case TYPE_OPENSKILL_RANKING_LIST:
                 sendRankingChunk(type, DBInterface.getTopOpenSkillRankingEntries(50), chunk_index);
                 break;
+            case TYPE_MAP_LIST:
+                sendRankingChunk(type, SharedMapStore.getInstance().list().toArray(), chunk_index);
+                break;
             case TYPE_OPENSKILL_PERSONAL_RANKING:
                 var profile = getProfile();
                 OpenSkillLeaderboardRankingEntry rankingEntry = profile != null ? getPersonalOpenSkillRankingEntry(
@@ -717,5 +733,112 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
             current_room.leave(this);
             current_room = null;
         }
+    }
+
+    public void beginMapUpload(String name, String hash, int file_size) {
+        map_upload = null;
+        if (name == null || hash == null)
+            return;
+        if (!SharedMap.isValidHash(hash)) {
+            client_interface.mapUploadFailed(hash, SharedMap.ERROR_INVALID_FILE);
+            return;
+        }
+        SharedMapStore store = SharedMapStore.getInstance();
+        SharedMap existing = store.get(hash);
+        // A map the server has can be played by anyone, guests included.
+        if (existing != null) {
+            client_interface.mapUploaded(existing);
+            return;
+        }
+        Profile profile = getProfile();
+        if (guest || profile == null) {
+            client_interface.mapUploadFailed(hash, SharedMap.ERROR_NOT_ALLOWED);
+        } else if (!SharedMap.isValidName(name) || !BannedWordFilter.isAllowed(name)) {
+            client_interface.mapUploadFailed(hash, SharedMap.ERROR_INVALID_NAME);
+        } else if (file_size <= 0 || file_size > SharedMap.MAX_FILE_SIZE) {
+            client_interface.mapUploadFailed(hash, SharedMap.ERROR_TOO_LARGE);
+        } else if (!store.canUpload(profile.getNick())) {
+            client_interface.mapUploadFailed(hash, SharedMap.ERROR_TOO_MANY);
+        } else {
+            map_upload = new MapUpload(name, hash, file_size, new ByteArrayOutputStream(file_size));
+            client_interface.mapUploadProgress(hash, 0);
+        }
+    }
+
+    public void uploadMapChunk(int chunk_index, byte[] data) {
+        MapUpload upload = map_upload;
+        // Chunks of a refused or abandoned upload may still be on their way.
+        if (upload == null)
+            return;
+        int received = upload.data().size();
+        boolean last = data != null && received + data.length == upload.file_size();
+        if (data == null || chunk_index != upload.nextChunk() || received + data.length > upload.file_size()
+                || (data.length != SharedMap.CHUNK_SIZE && !last)) {
+            map_upload = null;
+            client_interface.mapUploadFailed(upload.hash(), SharedMap.ERROR_INVALID_FILE);
+            return;
+        }
+        upload.data().write(data, 0, data.length);
+        if (!last) {
+            client_interface.mapUploadProgress(upload.hash(), chunk_index + 1);
+            return;
+        }
+        map_upload = null;
+        Profile profile = getProfile();
+        if (profile == null) {
+            client_interface.mapUploadFailed(upload.hash(), SharedMap.ERROR_NOT_ALLOWED);
+            return;
+        }
+        try {
+            SharedMap map = SharedMapStore.getInstance().add(upload.name(), profile.getNick(), upload.hash(),
+                    upload.data().toByteArray());
+            MatchmakingServer.getLogger().info(
+                    profile.getNick() + " uploaded map \"" + map.getName() + "\" (" + map.getHash() + ", " + map.getFileSize() + " bytes)");
+            client_interface.mapUploaded(map);
+        } catch (SharedMapStore.InvalidMapException e) {
+            MatchmakingServer.getLogger().info(getUsername() + " uploaded an invalid map: " + e.getMessage());
+            client_interface.mapUploadFailed(upload.hash(), SharedMap.ERROR_INVALID_FILE);
+        } catch (IOException e) {
+            MatchmakingServer.getLogger().warning("Could not store a map from " + getUsername() + ": " + e);
+            client_interface.mapUploadFailed(upload.hash(), SharedMap.ERROR_SERVER);
+        }
+    }
+
+    public void requestMapChunk(String hash, int chunk_index) {
+        if (hash == null)
+            return;
+        SharedMapStore store = SharedMapStore.getInstance();
+        SharedMap map = store.get(hash);
+        byte[] data = map != null ? store.readChunk(hash, chunk_index) : null;
+        if (data == null) {
+            client_interface.mapDownloadFailed(hash);
+            return;
+        }
+        client_interface.receiveMapChunk(hash, chunk_index, SharedMap.chunkCount(map.getFileSize()), data);
+    }
+
+    public void requestMapPreview(String hash) {
+        if (hash == null)
+            return;
+        SharedMapStore.Preview preview = SharedMapStore.getInstance().getPreview(hash);
+        if (preview == null) {
+            client_interface.receiveMapPreview(hash, 0, 0, 1, new byte[0]);
+            return;
+        }
+        byte[] data = preview.gzipped_rgb();
+        int total = SharedMap.chunkCount(data.length);
+        for (int i = 0; i < total; i++) {
+            int offset = i * SharedMap.CHUNK_SIZE;
+            client_interface.receiveMapPreview(hash, preview.size(), i, total, Arrays.copyOfRange(data,
+                    offset, Math.min(data.length, offset + SharedMap.CHUNK_SIZE)));
+        }
+    }
+
+    public void deleteMap(String hash) {
+        Profile profile = getProfile();
+        if (hash == null || guest || profile == null)
+            return;
+        if (SharedMapStore.getInstance().delete(hash, profile.getNick()))
+            MatchmakingServer.getLogger().info(profile.getNick() + " deleted map " + hash);
     }
 }
