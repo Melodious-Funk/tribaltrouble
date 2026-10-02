@@ -21,6 +21,12 @@ enum Brush {
     CLIFFS("brush_cliffs", "hint_cliffs", null),
     ERODE("brush_erode", "hint_erode", null),
     WARP("brush_warp", "hint_warp", null),
+    /** Turns the ground under the brush about its middle as one piece. */
+    TWIST("brush_twist", "hint_twist", null),
+    /** Winds the ground under the brush into a spiral. */
+    SWIRL("brush_swirl", "hint_swirl", null),
+    /** Grabs the ground and drags it along like putty, skewing it up or down as it stretches. */
+    STRETCH("brush_stretch", "hint_stretch", null),
     BEACH("brush_beach", "hint_beach", null),
     /** Copies an area dragged over, then pastes it wherever clicked. */
     COPY("brush_copy", "hint_copy", null),

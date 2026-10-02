@@ -57,6 +57,17 @@ final class TerrainEditor {
     private static final float ROUGHEN_RATE = 12f;
     /** Grid units per second a full intensity warp moves the ground at the brush's middle. */
     private static final float WARP_RATE = 6f;
+    /** Radians per second a full intensity twist turns the middle of the brush, and a swirl its very middle. */
+    private static final float TWIST_RATE = 1.5f;
+    private static final float SWIRL_RATE = 4f;
+    /** Share of a twist's width that turns as one piece, the rest shearing into the ground around. */
+    private static final float TWIST_CORE = .5f;
+    /** Share of a stretch's width that holds together at full intensity. */
+    private static final float STRETCH_CORE = .7f;
+    /** Meters ground the stretch drags rises or sinks for each grid unit it ends up from where it lay: a half slope. */
+    private static final float STRETCH_SKEW = HeightMap.METERS_PER_UNIT_GRID * .5f;
+    /** Steps one stretch is cut into at most, however far the cursor went since the last. */
+    private static final int MAX_STRETCH_STEPS = 256;
     /** How fast (1/seconds) erosion and beaches close the gap at full intensity. */
     private static final float ERODE_RATE = 20f;
     /** Share of the steepest step units walk that a path climbs at most per grid unit. */
@@ -90,6 +101,13 @@ final class TerrainEditor {
     private int stroke_y1;
 
     private boolean modified;
+
+    // For the brushes that move the ground about: where the ground now in each cell lay when the stroke began, in
+    // grid units, and whether that holds for the stroke in progress. Made the first time one of them is used.
+    private float @Nullable [] @Nullable [] origin_x;
+    private float @Nullable [] @Nullable [] origin_y;
+    private float @Nullable [] @Nullable [] scratch_y;
+    private boolean origins_ready;
 
     private record UndoStep(int x0, int y0, float @NonNull [] @NonNull [] heights) {
     }
@@ -144,14 +162,19 @@ final class TerrainEditor {
 
     /** Height at a grid position, bilinearly interpolated. */
     float getHeight(float gx, float gy) {
+        return sample(heights, gx, gy);
+    }
+
+    /** A value of a grid as large as the map at a grid position, bilinearly interpolated. */
+    private float sample(float @NonNull [] @NonNull [] grid, float gx, float gy) {
         gx = Math.clamp(gx, 0f, size - 1);
         gy = Math.clamp(gy, 0f, size - 1);
         int x0 = Math.min((int) gx, size - 2);
         int y0 = Math.min((int) gy, size - 2);
         float fx = gx - x0;
         float fy = gy - y0;
-        float h0 = heights[y0][x0] * (1 - fx) + heights[y0][x0 + 1] * fx;
-        float h1 = heights[y0 + 1][x0] * (1 - fx) + heights[y0 + 1][x0 + 1] * fx;
+        float h0 = grid[y0][x0] * (1 - fx) + grid[y0][x0 + 1] * fx;
+        float h1 = grid[y0 + 1][x0] * (1 - fx) + grid[y0 + 1][x0 + 1] * fx;
         return h0 * (1 - fy) + h1 * fy;
     }
 
@@ -161,6 +184,7 @@ final class TerrainEditor {
         if (stroke_backup != null)
             endStroke();
         stroke_backup = copyHeights();
+        origins_ready = false;
         stroke_x0 = Integer.MAX_VALUE;
         stroke_y0 = Integer.MAX_VALUE;
         stroke_x1 = Integer.MIN_VALUE;
@@ -712,6 +736,177 @@ final class TerrainEditor {
         float a = scratch[y0][x0] * (1 - fx) + scratch[y0][x0 + 1] * fx;
         float b = scratch[y0 + 1][x0] * (1 - fx) + scratch[y0 + 1][x0 + 1] * fx;
         return a * (1 - fy) + b * fy;
+    }
+
+    // ---- Moving the ground about ----
+
+    /**
+     * Turns the ground under the brush about its middle, anticlockwise (sign 1) or clockwise (sign -1) seen from
+     * above. The middle of the brush turns as one piece and the ground round it shears into the ground outside.
+     */
+    void applyTwist(float cx, float cy, float radius, float intensity, int sign, float dt) {
+        turn(cx, cy, radius, radius * TWIST_CORE, sign * intensity * TWIST_RATE * dt);
+    }
+
+    /**
+     * Swirls the ground under the brush like a whirlpool, anticlockwise (sign 1) or clockwise (sign -1) seen from
+     * above. The very middle spins fastest and the edge hardly at all, so whatever lies across the brush winds into a
+     * spiral.
+     */
+    void applySwirl(float cx, float cy, float radius, float intensity, int sign, float dt) {
+        turn(cx, cy, radius, 0f, sign * intensity * SWIRL_RATE * dt);
+    }
+
+    /** Turns the ground within a radius of a point by an angle in radians out to the core distance, less beyond. */
+    private void turn(float cx, float cy, float radius, float core, float angle) {
+        if (angle == 0f)
+            return;
+        moveGround(cx, cy, radius, true, 0f, (x, y, back) -> {
+            float dx = x - cx;
+            float dy = y - cy;
+            float distance = (float) Math.sqrt(dx * dx + dy * dy);
+            if (distance >= radius)
+                return false;
+            // The ground here came from where turning it back takes it.
+            double turned = -angle * plateau(distance, radius, core);
+            float cos = (float) Math.cos(turned);
+            float sin = (float) Math.sin(turned);
+            back[0] = cx + dx * cos - dy * sin;
+            back[1] = cy + dx * sin + dy * cos;
+            return true;
+        });
+    }
+
+    /**
+     * Drags the ground under the brush from one point to another like putty: the ground grabbed at the first point
+     * follows to the second, the ground behind it stretches out and the ground ahead bunches up. The ground is skewed
+     * up (sign 1) or down (sign -1) as it goes, by how far it ends up from where it lay, so the ground grabbed rises
+     * or sinks most and the stretch behind it slopes back to the ground it left. A long drag goes in short steps, so
+     * the ground never folds over itself.
+     *
+     * @param intensity how much of the brush holds together as one piece, from its very middle to most of it
+     */
+    void applyStretch(float ax, float ay, float bx, float by, float radius, float intensity, int sign) {
+        float core = radius * STRETCH_CORE * intensity;
+        float dx = bx - ax;
+        float dy = by - ay;
+        float length = (float) Math.sqrt(dx * dx + dy * dy);
+        if (length == 0f)
+            return;
+        // Past the core the weight falls off at most pi / 2 per falloff width; a step must stay well under the
+        // inverse of that, or ground behind would overtake the ground ahead of it.
+        int steps = Math.clamp((int) Math.ceil(length / Math.max(.1f, .4f * (radius - core))), 1,
+                MAX_STRETCH_STEPS);
+        float sx = dx / steps;
+        float sy = dy / steps;
+        for (int i = 1; i <= steps; i++) {
+            float cx = ax + sx * i;
+            float cy = ay + sy * i;
+            moveGround(cx, cy, radius, false, sign * STRETCH_SKEW, (x, y, back) -> {
+                float distance = (float) Math.hypot(x - cx, y - cy);
+                if (distance >= radius)
+                    return false;
+                float weight = plateau(distance, radius, core);
+                back[0] = x - sx * weight;
+                back[1] = y - sy * weight;
+                return true;
+            });
+        }
+    }
+
+    /** A value of a grid as large as the map at a grid position, through a Catmull-Rom spline. */
+    private float sampleCubic(float @NonNull [] @NonNull [] grid, float gx, float gy) {
+        gx = Math.clamp(gx, 0f, size - 1);
+        gy = Math.clamp(gy, 0f, size - 1);
+        int x0 = Math.min((int) gx, size - 2);
+        int y0 = Math.min((int) gy, size - 2);
+        float fx = gx - x0;
+        float fy = gy - y0;
+        return catmullRom(along(grid[Math.max(0, y0 - 1)], x0, fx), along(grid[y0], x0, fx),
+                along(grid[y0 + 1], x0, fx), along(grid[Math.min(size - 1, y0 + 2)], x0, fx), fy);
+    }
+
+    /** A row's value a share of the way from one cell to the next, through a Catmull-Rom spline. */
+    private float along(float @NonNull [] row, int x0, float fx) {
+        return catmullRom(row[Math.max(0, x0 - 1)], row[x0], row[x0 + 1], row[Math.min(size - 1, x0 + 2)], fx);
+    }
+
+    private static float catmullRom(float a, float b, float c, float d, float t) {
+        return b + .5f * t * (c - a + t * (2f * a - 5f * b + 4f * c - d + t * (3f * (b - c) + d - a)));
+    }
+
+    @FunctionalInterface
+    private interface Motion {
+        /** Puts in back where the ground now in a cell lay before this move, or returns false if it stays put. */
+        boolean from(int x, int y, float @NonNull [] back);
+    }
+
+    /**
+     * Moves the ground within a radius of a point. Each move is added to where each cell's ground lay when the stroke
+     * began, and its height read from there again, so the ground stays as sharp as it was however long it is turned
+     * or dragged about, rather than blurring a little more every frame.
+     *
+     * @param cubic whether to read the origins through a spline. Ground turned round and round winds them into tight
+     *     but smooth spirals, which bilinear reading lets drift a little every frame. Ground dragged along piles up
+     *     against the front of the brush, where a spline would overshoot and fold the ground over itself.
+     * @param skew meters the ground rises for each grid unit it ends up from where it lay, or sinks when below 0
+     */
+    private void moveGround(float cx, float cy, float radius, boolean cubic, float skew,
+            @NonNull Motion motion) {
+        float[][] start = stroke_backup;
+        if (start == null)
+            return;
+        int x0 = Math.max(0, (int) Math.floor(cx - radius));
+        int y0 = Math.max(0, (int) Math.floor(cy - radius));
+        int x1 = Math.min(size - 1, (int) Math.ceil(cx + radius));
+        int y1 = Math.min(size - 1, (int) Math.ceil(cy + radius));
+        if (x0 > x1 || y0 > y1)
+            return;
+        float[][] from_x = origin_x;
+        float[][] from_y = origin_y;
+        float[][] next_y = scratch_y;
+        if (from_x == null || from_y == null || next_y == null) {
+            from_x = origin_x = new float[size][size];
+            from_y = origin_y = new float[size][size];
+            next_y = scratch_y = new float[size][size];
+        }
+        if (!origins_ready) {
+            for (int y = 0; y < size; y++) {
+                Arrays.fill(from_y[y], y);
+                for (int x = 0; x < size; x++)
+                    from_x[y][x] = x;
+            }
+            origins_ready = true;
+        }
+        // The new origins go to scratch first, so every cell reads the origins from before this move.
+        float[] back = new float[2];
+        boolean moved = false;
+        for (int y = y0; y <= y1; y++) {
+            for (int x = x0; x <= x1; x++) {
+                if (!motion.from(x, y, back)) {
+                    scratch[y][x] = Float.NaN;
+                    continue;
+                }
+                scratch[y][x] = cubic ? sampleCubic(from_x, back[0], back[1]) : sample(from_x, back[0], back[1]);
+                next_y[y][x] = cubic ? sampleCubic(from_y, back[0], back[1]) : sample(from_y, back[0], back[1]);
+                moved = true;
+            }
+        }
+        if (!moved)
+            return;
+        for (int y = y0; y <= y1; y++) {
+            for (int x = x0; x <= x1; x++) {
+                float ox = scratch[y][x];
+                if (Float.isNaN(ox))
+                    continue;
+                float oy = next_y[y][x];
+                from_x[y][x] = ox;
+                from_y[y][x] = oy;
+                float rise = skew != 0f ? skew * (float) Math.hypot(x - ox, y - oy) : 0f;
+                heights[y][x] = clampHeight(x, y, sample(start, ox, oy) + rise);
+            }
+        }
+        markDirty(x0, y0, x1, y1);
     }
 
     /**

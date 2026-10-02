@@ -197,9 +197,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // Ground height where the stroke began: the flatten target, and the level the cursor is held to while painting.
     private float stroke_z;
     private int random_seed;
-    // Where a drag began, in meters.
+    // Where a drag began, or where the stretch brush grabbed the ground, in meters.
     private float ramp_x;
     private float ramp_y;
+    // Where the ground the stretch brush drags along was on the last frame, in meters.
+    private float stretch_x;
+    private float stretch_y;
 
     private boolean map_mode;
 
@@ -680,7 +683,15 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             return;
         }
         random_seed = random.nextInt();
+        if (brush == Brush.STRETCH)
+            grab();
         beginTerrainStroke();
+    }
+
+    /** Takes hold of the ground under the cursor for the stretch brush. */
+    private void grab() {
+        ramp_x = stretch_x = cursor_x;
+        ramp_y = stretch_y = cursor_y;
     }
 
     @Override
@@ -973,6 +984,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             case CLIFFS -> editor.applyCliffs(gx, gy, r, strength, stroke_sign, t, cliff_seed);
             case ERODE -> editor.applyErode(gx, gy, r, strength, stroke_sign, t);
             case WARP -> editor.applyWarp(gx, gy, r, strength, stroke_sign, t, random_seed);
+            case TWIST -> editor.applyTwist(gx, gy, r, strength, stroke_sign, t);
+            case SWIRL -> editor.applySwirl(gx, gy, r, strength, stroke_sign, t);
+            case STRETCH -> {
+                editor.applyStretch(toGrid(stretch_x), toGrid(stretch_y), gx, gy, r, strength, stroke_sign);
+                stretch_x = cursor_x;
+                stretch_y = cursor_y;
+            }
             case BEACH -> editor.applyBeach(gx, gy, r, strength, stroke_sign, t);
             default -> {
             }
@@ -1316,7 +1334,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             }
             batch.circle(cursor_x, cursor_y, radius, r, g, b, .9f);
             batch.dot(cursor_x, cursor_y, r, g, b, .9f);
-            if (brush.isDragShape() && stroke_sign != 0 && !campaign_active) {
+            if ((brush.isDragShape() || brush == Brush.STRETCH) && stroke_sign != 0 && !campaign_active) {
                 batch.circle(ramp_x, ramp_y, radius, r, g, b, .9f);
                 batch.line(ramp_x, ramp_y, cursor_x, cursor_y, r, g, b, .9f);
             }
