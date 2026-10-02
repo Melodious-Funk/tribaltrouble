@@ -25,7 +25,10 @@ enum Param {
     FACE("param_face"),
     TRIGGER("param_trigger"),
     HEADER("param_header"),
-    TEXT("param_text");
+    TEXT("param_text"),
+    /** A placed building, beside an {@link #OBJECT} when an action names both a unit and where it goes. */
+    BUILDING("param_building"),
+    TEAM("param_team");
 
     /** The kinds of unit that can be spawned, in {@link #UNIT_TYPE} order. */
     static final ObjectKind[] UNIT_TYPES = {ObjectKind.PEON, ObjectKind.ROCK_WARRIOR, ObjectKind.IRON_WARRIOR,
@@ -58,13 +61,18 @@ enum Param {
         return this == HEADER || this == TEXT;
     }
 
+    /** Whether the setting names a placed object, picked on the island. */
+    boolean isObject() {
+        return this == OBJECT || this == BUILDING;
+    }
+
     int getDefault() {
         return switch (this) {
             case COUNT -> 5;
             case SECONDS -> 60;
             case RADIUS -> 12;
             case PLAYER -> 1;
-            case AREA, OBJECT, TRIGGER -> -1;
+            case AREA, OBJECT, BUILDING, TRIGGER -> -1;
             // Iron warriors, the campaigns' usual troops.
             case UNIT_TYPE -> 2;
             case DEPLOY_TYPE -> 1;
@@ -95,6 +103,12 @@ enum Param {
             case SUPPLY_TYPE -> new String[]{CampaignEditor.i18n("supply_tree"), CampaignEditor.i18n("supply_rock"),
                     CampaignEditor.i18n("supply_iron"), CampaignEditor.i18n("supply_rubber")};
             case MAGIC -> new String[]{CampaignEditor.i18n("magic_0"), CampaignEditor.i18n("magic_1")};
+            case TEAM -> {
+                String[] names = new String[Scenario.NUM_PLAYERS];
+                for (int i = 0; i < names.length; i++)
+                    names[i] = CampaignEditor.i18n("team_name", i + 1);
+                yield names;
+            }
             case ROLE -> {
                 String[] names = new String[ROLES.length];
                 for (int i = 0; i < names.length; i++)

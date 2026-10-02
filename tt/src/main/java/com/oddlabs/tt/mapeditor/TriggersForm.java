@@ -64,7 +64,9 @@ final class TriggersForm extends Form {
 
         Group buttons = new Group();
         HorizButton button_new = button(buttons, null, "new_trigger", this::add);
-        HorizButton button_edit = button(buttons, button_new, "edit", () -> {
+        HorizButton button_template = button(buttons, button_new, "from_template",
+                () -> gui_root.addModalForm(new TemplateForm(gui_root, this::addFromTemplate)));
+        HorizButton button_edit = button(buttons, button_template, "edit", () -> {
             Integer selected = list.getSelected();
             if (selected != null)
                 edit(selected);
@@ -154,6 +156,16 @@ final class TriggersForm extends Form {
                 Step.condition(ConditionKind.GAME_STARTED));
         trigger.actions.add(Step.action(ActionKind.DIALOG));
         gui_root.addModalForm(new TriggerForm(gui_root, tools, trigger, List.of(this), edited -> {
+            scenario.triggers.add(edited);
+            tools.markModified();
+            refresh(edited.id);
+        }));
+    }
+
+    /** Opens a new trigger made from a template, to pick its areas and units before it is added. */
+    private void addFromTemplate(@NonNull TriggerTemplate template) {
+        Scenario scenario = tools.getScenario();
+        gui_root.addModalForm(new TriggerForm(gui_root, tools, template.create(scenario), List.of(this), edited -> {
             scenario.triggers.add(edited);
             tools.markModified();
             refresh(edited.id);

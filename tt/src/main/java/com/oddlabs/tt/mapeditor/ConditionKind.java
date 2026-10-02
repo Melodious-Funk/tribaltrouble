@@ -3,6 +3,7 @@ package com.oddlabs.tt.mapeditor;
 import org.jspecify.annotations.NonNull;
 
 import static com.oddlabs.tt.mapeditor.Param.AREA;
+import static com.oddlabs.tt.mapeditor.Param.BUILDING;
 import static com.oddlabs.tt.mapeditor.Param.COUNT;
 import static com.oddlabs.tt.mapeditor.Param.MAGIC;
 import static com.oddlabs.tt.mapeditor.Param.OBJECT;
@@ -35,7 +36,11 @@ enum ConditionKind {
     /** A player has stockpiled a supply (SupplyGatheredTrigger). */
     SUPPLIES_GATHERED("condition_supplies_gathered", PLAYER, SUPPLY_TYPE, COUNT),
     /** The player's chieftain casts a spell in an area (MagicUsedTrigger). */
-    MAGIC_USED("condition_magic_used", AREA, MAGIC);
+    MAGIC_USED("condition_magic_used", AREA, MAGIC),
+    /** Fewer golden statues than a count are left in an area, or anywhere when it names none. */
+    STATUES_LEFT("condition_statues_left", AREA, COUNT),
+    /** A tower or ship holds at least a count of units. */
+    UNITS_INSIDE("condition_units_inside", BUILDING, COUNT);
 
     private final @NonNull String key;
     private final @NonNull Param @NonNull [] params;

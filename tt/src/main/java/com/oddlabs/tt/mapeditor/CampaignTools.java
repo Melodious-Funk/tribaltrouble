@@ -141,7 +141,7 @@ final class CampaignTools {
         };
         RadioButton radio = new RadioButton(false, tools, CampaignEditor.i18n("tool_campaign"));
         PulldownMenu<Tool> menu_tool = new PulldownMenu<>();
-        for (ObjectKind kind : ObjectKind.values())
+        for (ObjectKind kind : ObjectKind.EDITOR_ORDER)
             menu_tool.addItem(new PulldownItem<>(kind.getName(), new Tool(kind, false)));
         menu_tool.addItem(new PulldownItem<>(CampaignEditor.i18n("tool_areas"), new Tool(null, true)));
         menu_tool.addItem(new PulldownItem<>(CampaignEditor.i18n("tool_erase"), new Tool(null, false)));
@@ -214,6 +214,8 @@ final class CampaignTools {
     @NonNull String getHint() {
         if (picking == Param.AREA)
             return CampaignEditor.i18n("hint_pick_area");
+        if (picking == Param.BUILDING)
+            return CampaignEditor.i18n("hint_pick_building");
         if (picking != null)
             return CampaignEditor.i18n("hint_pick_object");
         ObjectKind kind = tool.kind();
@@ -223,6 +225,12 @@ final class CampaignTools {
             return CampaignEditor.i18n("hint_erase_objects");
         if (kind == ObjectKind.CHIEFTAIN)
             return CampaignEditor.i18n("hint_chieftain", Scenario.playerName(player));
+        if (kind == ObjectKind.STATUE)
+            return CampaignEditor.i18n("hint_statue");
+        if (kind.isShip())
+            return CampaignEditor.i18n("hint_ship", Scenario.playerName(player));
+        if (kind.getGuardType() != -1)
+            return CampaignEditor.i18n("hint_guarded_tower", kind.getName(), Scenario.playerName(player));
         if (kind.isBuilding())
             return CampaignEditor.i18n("hint_building", kind.getName(), Scenario.playerName(player));
         return CampaignEditor.i18n("hint_units", kind.getName(), Scenario.playerName(player));
@@ -257,10 +265,12 @@ final class CampaignTools {
             return;
         }
         ObjectKind kind = tool.kind();
-        if (sign > 0 && kind != null && (kind.isBuilding() || kind == ObjectKind.CHIEFTAIN)) {
-            ensurePlaying();
+        if (sign > 0 && kind != null && kind.isSingle()) {
+            if (kind.hasOwner())
+                ensurePlaying();
             if (!layer.placeAt(kind, player, x, y, current))
-                host().getGUIRoot().getInfoPrinter().print(CampaignEditor.i18n("cannot_place", kind.getName()));
+                host().getGUIRoot().getInfoPrinter().print(CampaignEditor.i18n(kind.isShip() ? "cannot_place_ship"
+                        : "cannot_place", kind.getName()));
         }
     }
 
@@ -282,7 +292,7 @@ final class CampaignTools {
         if (tool.areas())
             return;
         ObjectKind kind = tool.kind();
-        boolean single = kind != null && (kind.isBuilding() || kind == ObjectKind.CHIEFTAIN);
+        boolean single = kind != null && kind.isSingle();
         if (stroke_sign > 0 && single)
             return;
         dab_timer += t;

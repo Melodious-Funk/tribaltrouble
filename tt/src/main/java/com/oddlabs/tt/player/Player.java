@@ -41,7 +41,8 @@ public final class Player implements PlayerInterface {
     public static final int DEFAULT_MAX_UNIT_COUNT = Game.DEFAULT_MAX_UNIT_COUNT;
 
     private final @NonNull World world;
-    private final @NonNull PlayerInfo player_info;
+    // Replaced, not changed, when a campaign trigger moves the player to another team.
+    private @NonNull PlayerInfo player_info;
     private final Army units = new Army();
     private final @NonNull SupplyContainer unit_count;
     private final SupplyContainer building_count;
@@ -638,6 +639,14 @@ public final class Player implements PlayerInterface {
 
     public void setStartY(float y) {
         start_y = y;
+    }
+
+    /**
+     * Moves the player to another team, as a campaign's story turns friends into foes or foes into friends. Who is an
+     * enemy is asked afresh each time, so units, towers and the AI follow at once.
+     */
+    public void setTeam(int team) {
+        player_info = new PlayerInfo(team, player_info.getRace(), player_info.getName());
     }
 
     public boolean isEnemy(@NonNull Player other_player) {

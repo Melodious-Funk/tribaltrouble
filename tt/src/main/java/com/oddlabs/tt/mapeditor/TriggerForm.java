@@ -103,7 +103,15 @@ final class TriggerForm extends Form {
             if (selected != null)
                 editAction(selected);
         });
-        HorizButton button_remove = button(buttons, button_edit, "remove", () -> {
+        HorizButton button_copy = button(buttons, button_edit, "duplicate", () -> {
+            Integer selected = list_actions.getSelected();
+            if (selected != null) {
+                read();
+                draft.actions.add(selected + 1, draft.actions.get(selected).copy());
+                refresh(selected + 1);
+            }
+        });
+        HorizButton button_remove = button(buttons, button_copy, "remove", () -> {
             Integer selected = list_actions.getSelected();
             if (selected != null) {
                 read();

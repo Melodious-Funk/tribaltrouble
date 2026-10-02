@@ -10,6 +10,7 @@ import com.oddlabs.tt.model.SceneryModel;
 import com.oddlabs.tt.model.UnitTemplate;
 import com.oddlabs.tt.pathfinder.UnitGrid;
 import com.oddlabs.tt.player.Player;
+import org.joml.Vector4f;
 import org.joml.Vector4fc;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -35,6 +36,12 @@ final class ScenarioLayer {
     /** Cells kept between painted units at the lowest density above zero. */
     private static final float SPARSE_SPACING = 4f;
     private static final float AREA_ALPHA = .9f;
+    /** How far from the playable shore a ship may lie, in cells. */
+    private static final int SHIP_SHORE_REACH = 5;
+    /** As the campaigns set their statues down. */
+    private static final float STATUE_SHADOW = 2.6f;
+    /** The mark under a statue, which is no one's. */
+    private static final Vector4fc GOLD = new Vector4f(1f, .8f, .2f, 1f);
 
     /** What one stroke placed, removed and changed, to take it back. */
     static final class Stroke {
@@ -57,6 +64,8 @@ final class ScenarioLayer {
     // The placement id taking each cell, or 0.
     private final int @NonNull [] occupant;
     private final Map<Integer, SceneryModel> models = new HashMap<>();
+    // The warrior standing on each guarded tower, by the tower's id.
+    private final Map<Integer, SceneryModel> guards = new HashMap<>();
     private boolean modified;
 
     ScenarioLayer(@NonNull World world, @NonNull RacesResources races, @NonNull AccessMap access,
@@ -94,17 +103,27 @@ final class ScenarioLayer {
     // ---- Models ----
 
     private void show(Scenario.@NonNull Placement placement) {
+        ObjectKind kind = placement.kind();
+        float x = UnitGrid.coordinateFromGrid(placement.x());
+        float y = UnitGrid.coordinateFromGrid(placement.y());
+        if (!kind.hasOwner()) {
+            double angle = placement.id() * 2.399963;
+            models.put(placement.id(), new SceneryModel(world, x, y, (float) Math.cos(angle),
+                    (float) Math.sin(angle), races.getTreasures()[statueVariant(placement.id())], STATUE_SHADOW,
+                    false, null));
+            return;
+        }
         Scenario.PlayerSetup player = scenario.players[placement.player()];
         if (!player.enabled)
             return;
         Race race = races.getRace(player.race);
-        ObjectKind kind = placement.kind();
-        float x = UnitGrid.coordinateFromGrid(placement.x());
-        float y = UnitGrid.coordinateFromGrid(placement.y());
         SceneryModel model;
         if (kind.isBuilding()) {
             BuildingTemplate template = race.getBuildingTemplate(kind.getBuildingType());
             model = new SceneryModel(world, x, y, 1f, 0f, template.getBuiltRenderer());
+            if (kind.getGuardType() != -1)
+                guards.put(placement.id(), new GuardModel(world, x, y,
+                        race.getUnitTemplate(kind.getGuardType()), template.getMountOffset()));
         } else {
             UnitTemplate template = race.getUnitTemplate(kind.getUnitType());
             // A different way for each, so a crowd does not stand to attention.
@@ -119,6 +138,31 @@ final class ScenarioLayer {
         SceneryModel model = models.remove(placement.id());
         if (model != null)
             model.remove();
+        SceneryModel guard = guards.remove(placement.id());
+        if (guard != null)
+            guard.remove();
+    }
+
+    /** Which of the golden statue models a placed statue shows, the same in the editor as in the game. */
+    static int statueVariant(int id) {
+        return Math.floorMod(id * 7 + 3, ObjectKind.STATUE_VARIANTS);
+    }
+
+    /** A warrior standing on its tower, raised as the game raises a tower's guard. */
+    private static final class GuardModel extends SceneryModel {
+        private final float offset_z;
+
+        GuardModel(@NonNull World world, float x, float y, @NonNull UnitTemplate template, float offset_z) {
+            super(world, x, y, 0f, -1f, template.getSpriteRenderer(), 0f, false, null);
+            this.offset_z = offset_z;
+            // The constructor set it down before the offset was known.
+            setPosition(x, y);
+        }
+
+        @Override
+        public float getOffsetZ() {
+            return offset_z;
+        }
     }
 
     /** Shows a player's objects again, after the player's tribe or taking part changed. */
@@ -142,6 +186,9 @@ final class ScenarioLayer {
             SceneryModel model = models.get(placement.id());
             if (model != null)
                 model.setPosition(model.getPositionX(), model.getPositionY());
+            SceneryModel guard = guards.get(placement.id());
+            if (guard != null)
+                guard.setPosition(guard.getPositionX(), guard.getPositionY());
         }
     }
 
@@ -150,6 +197,9 @@ final class ScenarioLayer {
         for (SceneryModel model : models.values())
             model.remove();
         models.clear();
+        for (SceneryModel guard : guards.values())
+            guard.remove();
+        guards.clear();
     }
 
     // ---- Cells ----
@@ -169,19 +219,39 @@ final class ScenarioLayer {
         return x >= 0 && y >= 0 && x < size && y < size && occupant[y * size + x] != 0;
     }
 
-    /** Whether an object fits with its centre on a cell: its whole footprint on clear, playable ground. */
+    /**
+     * Whether an object fits with its centre on a cell: its whole footprint clear, and on playable ground, or for a
+     * ship on the sea close to the playable shore.
+     */
     boolean canPlace(@NonNull ObjectKind kind, int cx, int cy) {
         int r = kind.getFootprintRadius();
         if (cx - r < 0 || cy - r < 0 || cx + r >= size || cy + r >= size)
             return false;
         for (int y = cy - r; y <= cy + r; y++) {
             for (int x = cx - r; x <= cx + r; x++) {
-                if (access.get(x, y) != AccessMap.Kind.REGION || resources.hasResource(x, y)
-                        || occupant[y * size + x] != 0)
+                if (occupant[y * size + x] != 0 || !groundFits(kind, x, y))
                     return false;
             }
         }
-        return true;
+        return !kind.isShip() || nearShore(cx, cy);
+    }
+
+    /** Whether one cell of an object's footprint is ground it can stand on. */
+    private boolean groundFits(@NonNull ObjectKind kind, int x, int y) {
+        if (kind.isShip())
+            return access.isSea(x, y);
+        return access.get(x, y) == AccessMap.Kind.REGION && !resources.hasResource(x, y);
+    }
+
+    /** Whether the playable region is within reach of a sea cell, for a ship's units to land on. */
+    private boolean nearShore(int cx, int cy) {
+        for (int y = Math.max(0, cy - SHIP_SHORE_REACH); y <= Math.min(size - 1, cy + SHIP_SHORE_REACH); y++) {
+            for (int x = Math.max(0, cx - SHIP_SHORE_REACH); x <= Math.min(size - 1, cx + SHIP_SHORE_REACH); x++) {
+                if (access.get(x, y) == AccessMap.Kind.REGION)
+                    return true;
+            }
+        }
+        return false;
     }
 
     private static int toGrid(float meters) {
@@ -191,7 +261,7 @@ final class ScenarioLayer {
     private int countUnits(int player) {
         int count = 0;
         for (Scenario.Placement placement : scenario.placements) {
-            if (placement.player() == player && !placement.kind().isBuilding()
+            if (placement.player() == player && placement.kind().isUnit()
                     && placement.kind() != ObjectKind.CHIEFTAIN)
                 count++;
         }
@@ -232,12 +302,13 @@ final class ScenarioLayer {
                 if (placement.player() == player && placement.kind() == ObjectKind.CHIEFTAIN)
                     remove(placement, stroke);
             }
-        } else if (!kind.isBuilding() && countUnits(player) >= Player.DEFAULT_MAX_UNIT_COUNT) {
+        } else if (kind.isUnit() && countUnits(player) >= Player.DEFAULT_MAX_UNIT_COUNT) {
             return false;
         }
         if (!canPlace(kind, cx, cy))
             return false;
-        add(new Scenario.Placement(scenario.newId(), player, kind, cx, cy), stroke);
+        // A statue is no one's; it is kept as the first player's.
+        add(new Scenario.Placement(scenario.newId(), kind.hasOwner() ? player : 0, kind, cx, cy), stroke);
         return true;
     }
 
@@ -298,7 +369,8 @@ final class ScenarioLayer {
      */
     void erase(@Nullable ObjectKind kind, int player, float cx, float cy, float radius, @NonNull Stroke stroke) {
         for (Scenario.Placement placement : new ArrayList<>(scenario.placements)) {
-            if ((kind != null && placement.kind() != kind) || (player != -1 && placement.player() != player))
+            if ((kind != null && placement.kind() != kind)
+                    || (player != -1 && placement.kind().hasOwner() && placement.player() != player))
                 continue;
             float dx = UnitGrid.coordinateFromGrid(placement.x()) - cx;
             float dy = UnitGrid.coordinateFromGrid(placement.y()) - cy;
@@ -309,15 +381,21 @@ final class ScenarioLayer {
         }
     }
 
-    /** Takes away objects whose ground left the playable region; undoing the edit brings them back. */
+    /**
+     * Takes away objects whose ground left the playable region, or ships the sea or shore left; undoing the edit brings
+     * them back.
+     */
     boolean prune(@NonNull Stroke stroke) {
         boolean changed = false;
         for (Scenario.Placement placement : new ArrayList<>(scenario.placements)) {
-            int r = placement.kind().getFootprintRadius();
-            boolean lost = false;
+            ObjectKind kind = placement.kind();
+            int r = kind.getFootprintRadius();
+            boolean lost = kind.isShip() && !nearShore(placement.x(), placement.y());
             for (int y = placement.y() - r; y <= placement.y() + r && !lost; y++) {
-                for (int x = placement.x() - r; x <= placement.x() + r && !lost; x++)
-                    lost = x < 0 || y < 0 || x >= size || y >= size || access.get(x, y) != AccessMap.Kind.REGION;
+                for (int x = placement.x() - r; x <= placement.x() + r && !lost; x++) {
+                    lost = x < 0 || y < 0 || x >= size || y >= size
+                            || (kind.isShip() ? !access.isSea(x, y) : access.get(x, y) != AccessMap.Kind.REGION);
+                }
             }
             if (lost) {
                 remove(placement, stroke);
@@ -438,9 +516,10 @@ final class ScenarioLayer {
                 collect(action, ActionKind.of(action.kind).getParams(), named_objects, named_areas);
         }
         for (Scenario.Placement placement : scenario.placements) {
-            if (!scenario.players[placement.player()].enabled)
+            boolean owned = placement.kind().hasOwner();
+            if (owned && !scenario.players[placement.player()].enabled)
                 continue;
-            Vector4fc c = colours[placement.player() % colours.length];
+            Vector4fc c = owned ? colours[placement.player() % colours.length] : GOLD;
             float x = UnitGrid.coordinateFromGrid(placement.x());
             float y = UnitGrid.coordinateFromGrid(placement.y());
             if (placement.kind().isBuilding()) {
@@ -473,7 +552,7 @@ final class ScenarioLayer {
     private static void collect(@NonNull Step step, @NonNull Param @NonNull [] params,
             @NonNull Set<Integer> objects, @NonNull Set<Integer> areas) {
         for (Param param : params) {
-            if (param == Param.OBJECT)
+            if (param.isObject())
                 objects.add(step.get(param));
             else if (param == Param.AREA)
                 areas.add(step.get(param));

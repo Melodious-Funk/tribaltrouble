@@ -141,7 +141,8 @@ final class StepForm extends Form {
             }
             case AREA -> {
                 PulldownMenu<Integer> menu = newMenu(scenario.areas.size() + 1);
-                menu.addItem(new PulldownItem<>(CampaignEditor.i18n("none"), -1));
+                menu.addItem(new PulldownItem<>(CampaignEditor.i18n(Scenario.isAreaOptional(condition, draft)
+                        ? "whole_island" : "none"), -1));
                 int chosen = 0;
                 for (Scenario.Area area : scenario.areas) {
                     if (area.id == draft.get(param))
@@ -152,7 +153,7 @@ final class StepForm extends Form {
                         - Skin.getSkin().getFormData().objectSpacing()), pickButton(param));
                 controls.put(param, menu);
             }
-            case OBJECT -> {
+            case OBJECT, BUILDING -> {
                 Label label = new Label(scenario.describe(draft, param), Skin.getSkin().getEditFont(),
                         CONTROL_WIDTH - PICK_WIDTH - Skin.getSkin().getFormData().objectSpacing());
                 rows.add(caption, label, pickButton(param));
@@ -271,8 +272,16 @@ final class StepForm extends Form {
         List<Form> stack = new ArrayList<>(parents);
         stack.add(this);
         tools.pick(param, stack, id -> {
-            if (id != -1)
+            Scenario.Placement placement = param.isObject() && id != -1 ? tools.getScenario().findPlacement(id)
+                    : null;
+            if (placement != null && !Scenario.fits(condition, draft, param, placement.kind())) {
+                // Said at once, rather than only when the level is tested.
+                gui_root.getInfoPrinter().print(CampaignEditor.i18n("pick_refused",
+                        tools.getScenario().describePlacement(placement),
+                        CampaignEditor.i18n(Scenario.wanted(condition, draft, param))));
+            } else if (id != -1) {
                 draft.set(param, id);
+            }
             reopen();
         });
     }

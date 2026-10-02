@@ -70,6 +70,11 @@ final class AccessMap {
         return kinds[y * size + x];
     }
 
+    /** Whether a cell is under the sea, as of the last {@link #compute}. */
+    boolean isSea(int x, int y) {
+        return !land[y * size + x];
+    }
+
     /** Whether a cell left the playable region between the compute before the last and the last. */
     boolean leftRegion(int x, int y) {
         int i = y * size + x;

@@ -17,8 +17,11 @@ import com.oddlabs.tt.model.IronSupply;
 import com.oddlabs.tt.model.Race;
 import com.oddlabs.tt.model.RacesResources;
 import com.oddlabs.tt.model.RockSupply;
+
 import com.oddlabs.tt.model.RubberSupply;
+import com.oddlabs.tt.model.SceneryModel;
 import com.oddlabs.tt.model.Selectable;
+import com.oddlabs.tt.model.Ship;
 import com.oddlabs.tt.model.Supply;
 import com.oddlabs.tt.model.SupplyContainer;
 import com.oddlabs.tt.model.Unit;
@@ -26,6 +29,8 @@ import com.oddlabs.tt.model.UnitTemplate;
 import com.oddlabs.tt.model.behaviour.MagicController;
 import com.oddlabs.tt.model.behaviour.NullController;
 import com.oddlabs.tt.model.weapon.IronAxeWeapon;
+import com.oddlabs.tt.model.weapon.RockAxeWeapon;
+import com.oddlabs.tt.model.weapon.RubberAxeWeapon;
 import com.oddlabs.tt.pathfinder.UnitGrid;
 import com.oddlabs.tt.player.AI;
 import com.oddlabs.tt.player.AdvancedAI;
@@ -42,8 +47,10 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Random;
 import java.util.ResourceBundle;
 
@@ -57,6 +64,12 @@ final class ScenarioRunner {
     private static final float JUMP_METERS_PER_SECOND = 200f;
     private static final float JUMP_MAX_SECONDS = 3f;
     private static final int KILL_DAMAGE = 1_000_000;
+    /** As the campaigns set their statues down. */
+    private static final float STATUE_SHADOW = 2.6f;
+    /** How far from where it was placed a ship is moved to find water it can lie in, in cells. */
+    private static final int SHIP_SEARCH_RADIUS = 10;
+    /** Tries at a free cell for each statue spawned in an area. */
+    private static final int STATUE_TRIES = 30;
 
     /** What ends the level once a trigger decides it. */
     interface Outcome {
@@ -72,6 +85,9 @@ final class ScenarioRunner {
     private final @Nullable Player @NonNull [] players = new Player[Scenario.NUM_PLAYERS];
     // The live unit or building behind each placed object id, following units that change owner.
     private final Map<Integer, Selectable<?>> objects = new HashMap<>();
+    // The golden statues still standing, placed or spawned, and the placed ones by id.
+    private final List<SceneryModel> statues = new ArrayList<>();
+    private final Map<Integer, SceneryModel> placed_statues = new HashMap<>();
     private final Map<Integer, Watch> watches = new HashMap<>();
     private final Random random = new Random(42);
     private @NonNull String objective;
@@ -104,6 +120,13 @@ final class ScenarioRunner {
     void start() {
         Unit[] chieftains = new Unit[Scenario.NUM_PLAYERS];
         for (Scenario.Placement placement : scenario.placements) {
+            if (placement.kind() == ObjectKind.STATUE) {
+                SceneryModel statue = newStatue(placement.x(), placement.y(),
+                        ScenarioLayer.statueVariant(placement.id()), placement.id());
+                if (statue != null)
+                    placed_statues.put(placement.id(), statue);
+                continue;
+            }
             Player player = players[placement.player()];
             if (player == null)
                 continue;
@@ -130,13 +153,12 @@ final class ScenarioRunner {
         ObjectKind kind = placement.kind();
         float x = UnitGrid.coordinateFromGrid(placement.x());
         float y = UnitGrid.coordinateFromGrid(placement.y());
+        if (kind.isShip())
+            return placeShip(player, placement.x(), placement.y());
         if (kind.isBuilding()) {
             Building building = player.buildBuilding(kind.getBuildingType(), placement.x(), placement.y());
-            if (building != null && kind == ObjectKind.GUARDED_TOWER
-                    && !player.getUnitCountContainer().isSupplyFull()) {
-                Unit guard = new Unit(player, x, y, null, player.getRace().getUnitTemplate(Race.UNIT_WARRIOR_IRON));
-                guard.setTarget(building, Action.DEFAULT, false);
-            }
+            if (building != null && kind.getGuardType() != -1)
+                man(building, kind.getGuardType());
             return building;
         }
         if (kind == ObjectKind.CHIEFTAIN) {
@@ -150,6 +172,68 @@ final class ScenarioRunner {
         if (player.getUnitCountContainer().isSupplyFull())
             return null;
         return new Unit(player, x, y, null, player.getRace().getUnitTemplate(kind.getUnitType()));
+    }
+
+    /**
+     * Puts a warrior straight into a tower. Walking in from the tower's own cell, as the game's campaigns have their
+     * guards do, often never gets there, leaving the guard standing about and the tower empty.
+     */
+    private static void man(@NonNull Building tower, int warrior_type) {
+        Player owner = tower.getOwner();
+        if (owner.getUnitCountContainer().isSupplyFull() || tower.getUnitContainer() == null)
+            return;
+        Unit guard = new Unit(owner, tower.getPositionX(), tower.getPositionY(), null,
+                owner.getRace().getUnitTemplate(warrior_type));
+        if (tower.getUnitContainer().canEnter(guard))
+            tower.getUnitContainer().enter(guard);
+        else
+            guard.setTarget(tower, Action.DEFAULT, false);
+    }
+
+    /** Puts a ship on the water where it was placed, or the nearest spot a ship can lie in, ready to sail. */
+    private @Nullable Ship placeShip(@NonNull Player player, int grid_x, int grid_y) {
+        if (player.getBuildingCountContainer().isSupplyFull())
+            return null;
+        var template = player.getRace().getBuildingTemplate(Race.BUILDING_SHIP);
+        UnitGrid grid = viewer.getWorld().getUnitGrid();
+        for (int radius = 0; radius <= SHIP_SEARCH_RADIUS; radius++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dx = -radius; dx <= radius; dx++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) != radius)
+                        continue;
+                    int x = grid_x + dx;
+                    int y = grid_y + dy;
+                    if (x < 0 || y < 0 || x >= grid.getGridSize() || y >= grid.getGridSize()
+                            || !Ship.isPlacingLegal(grid, template, x, y))
+                        continue;
+                    Ship ship = new Ship(player, template, x, y);
+                    ship.instantBuild();
+                    return ship;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** A golden statue on a cell, if the cell is free land; it stands in the way like the campaigns' statues. */
+    private @Nullable SceneryModel newStatue(int grid_x, int grid_y, int variant, int id) {
+        UnitGrid grid = viewer.getWorld().getUnitGrid();
+        if (grid_x < 0 || grid_y < 0 || grid_x >= grid.getGridSize() || grid_y >= grid.getGridSize()
+                || grid.isGridOccupied(grid_x, grid_y, UnitGrid.LAND) || grid.isWater(grid_x, grid_y)
+                || grid.getRegion(grid_x, grid_y, UnitGrid.LAND) == null)
+            return null;
+        double angle = id * 2.399963;
+        SceneryModel statue = new SceneryModel(viewer.getWorld(), UnitGrid.coordinateFromGrid(grid_x),
+                UnitGrid.coordinateFromGrid(grid_y), (float) Math.cos(angle), (float) Math.sin(angle),
+                viewer.getWorld().getRacesResources().getTreasures()[variant], STATUE_SHADOW, true,
+                CampaignEditor.i18n("object_statue_name"));
+        statues.add(statue);
+        return statue;
+    }
+
+    private void removeStatue(@NonNull SceneryModel statue) {
+        if (statues.remove(statue))
+            statue.remove();
     }
 
     private static @NonNull Unit newChieftain(@NonNull Player player, float x, float y) {
@@ -172,7 +256,7 @@ final class ScenarioRunner {
         Scenario.Placement first = null;
         Scenario.Placement best = null;
         for (Scenario.Placement placement : scenario.placements) {
-            if (placement.player() != index)
+            if (placement.player() != index || !placement.kind().hasOwner())
                 continue;
             if (first == null)
                 first = placement;
@@ -265,15 +349,12 @@ final class ScenarioRunner {
                             && countUnits(player, area) >= Math.max(1, step.get(Param.COUNT));
                 }
                 case UNITS_NEAR_OBJECT -> {
-                    Selectable<?> object = objects.get(step.get(Param.OBJECT));
+                    float[] at = whereIs(step.get(Param.OBJECT));
                     Player player = players[step.get(Param.PLAYER)];
-                    yield object != null && !object.isDead() && player != null
-                            && hasUnitNear(player, object, step.get(Param.RADIUS));
+                    yield at != null && player != null
+                            && hasUnitNear(player, objects.get(step.get(Param.OBJECT)), at, step.get(Param.RADIUS));
                 }
-                case OBJECT_DESTROYED -> {
-                    Selectable<?> object = objects.get(step.get(Param.OBJECT));
-                    yield object == null || object.isDead();
-                }
+                case OBJECT_DESTROYED -> whereIs(step.get(Param.OBJECT)) == null;
                 case PLAYER_ELIMINATED -> {
                     Player player = players[step.get(Param.PLAYER)];
                     yield player == null || isEliminated(player);
@@ -289,6 +370,14 @@ final class ScenarioRunner {
                             >= step.get(Param.COUNT);
                 }
                 case MAGIC_USED -> magicUsed(step);
+                case STATUES_LEFT -> statuesIn(scenario.findArea(step.get(Param.AREA))).size()
+                        < step.get(Param.COUNT);
+                case UNITS_INSIDE -> {
+                    Selectable<?> object = objects.get(step.get(Param.BUILDING));
+                    yield object instanceof Building building && !building.isDead()
+                            && building.getUnitContainer() != null
+                            && building.getUnitContainer().getNumSupplies() >= Math.max(1, step.get(Param.COUNT));
+                }
             };
         }
 
@@ -420,10 +509,13 @@ final class ScenarioRunner {
             }
             case REMOVE_OBJECT -> {
                 Selectable<?> object = objects.get(step.get(Param.OBJECT));
+                SceneryModel statue = placed_statues.get(step.get(Param.OBJECT));
                 if (object instanceof Unit unit && !unit.isDead())
                     unit.removeNow();
                 else if (object instanceof Building building && !building.isDead())
                     building.hit(KILL_DAMAGE, 0f, 1f, building.getOwner());
+                else if (statue != null)
+                    removeStatue(statue);
             }
             case SET_AI -> {
                 Player player = players[step.get(Param.PLAYER)];
@@ -445,8 +537,169 @@ final class ScenarioRunner {
                 String message = step.getText(Param.TEXT);
                 outcome.defeat(message.isBlank() ? CampaignEditor.i18n("default_defeat") : message);
             }
+            case SET_TEAM -> {
+                Player player = players[step.get(Param.PLAYER)];
+                if (player != null)
+                    player.setTeam(Math.clamp(step.get(Param.TEAM), 0, Scenario.NUM_PLAYERS - 1));
+            }
+            case ENTER_BUILDING -> {
+                Building building = liveBuilding(step.get(Param.BUILDING));
+                if (objects.get(step.get(Param.OBJECT)) instanceof Unit unit && building != null)
+                    sendInto(unit, building);
+            }
+            case BOARD_FROM_AREA -> {
+                Scenario.Area area = scenario.findArea(step.get(Param.AREA));
+                Player player = players[step.get(Param.PLAYER)];
+                Building building = liveBuilding(step.get(Param.BUILDING));
+                if (area != null && player != null && building != null) {
+                    int left = Math.max(1, step.get(Param.COUNT));
+                    for (Unit unit : unitsOf(player)) {
+                        if (left > 0 && area.contains(unit.getPositionX(), unit.getPositionY())
+                                && sendInto(unit, building))
+                            left--;
+                    }
+                }
+            }
+            case LEAVE_BUILDING -> {
+                Building building = liveBuilding(step.get(Param.BUILDING));
+                if (building instanceof Ship ship)
+                    unload(ship, Integer.MAX_VALUE, null);
+                else if (building != null && building.getUnitContainer() != null)
+                    emptyTower(building);
+            }
+            case DEPLOY_FROM -> {
+                Building building = liveBuilding(step.get(Param.BUILDING));
+                if (building != null)
+                    deployFrom(building, deployType(step.get(Param.DEPLOY_TYPE)), Math.max(1, step.get(Param.COUNT)));
+            }
+            case SPAWN_STATUES -> {
+                Scenario.Area area = scenario.findArea(step.get(Param.AREA));
+                if (area != null)
+                    spawnStatues(area, Math.max(1, step.get(Param.COUNT)));
+            }
+            case REMOVE_STATUES -> {
+                for (SceneryModel statue : statuesIn(scenario.findArea(step.get(Param.AREA))))
+                    removeStatue(statue);
+            }
         }
         return false;
+    }
+
+    private @Nullable Building liveBuilding(int id) {
+        return objects.get(id) instanceof Building building && !building.isDead() ? building : null;
+    }
+
+    /**
+     * Sends a unit to walk into a tower or aboard a ship of its own tribe, as the player would order it.
+     *
+     * @return whether it was sent: it lives, is free to go, and fits
+     */
+    private static boolean sendInto(@NonNull Unit unit, @NonNull Building building) {
+        if (unit.isDead() || unit.isMounted() || unit.getOwner() != building.getOwner()
+                || building.getUnitContainer() == null || !building.getUnitContainer().canEnter(unit))
+            return false;
+        unit.setTarget(building, Action.DEFAULT, false);
+        return true;
+    }
+
+    /** Brings a tower's guard down, wherever the tower has room by its door. */
+    private static void emptyTower(@NonNull Building tower) {
+        if (tower.getUnitContainer().getNumSupplies() > 0)
+            tower.getUnitContainer().exit();
+    }
+
+    /**
+     * Sets units on a ship ashore, if it lies by land; at sea there is nowhere for them to go.
+     *
+     * @param count how many at most
+     * @param type the kind to land, or null for any kind
+     */
+    private static void unload(@NonNull Ship ship, int count, @Nullable DeployType type) {
+        if (ship.getEntrance() == ship || ship.getShipHR() == null)
+            return;
+        Race race = ship.getOwner().getRace();
+        int[] kinds = type != null ? new int[]{unitType(type)} : new int[]{Race.UNIT_WARRIOR_RUBBER,
+                Race.UNIT_WARRIOR_IRON, Race.UNIT_WARRIOR_ROCK, Race.UNIT_PEON, Race.UNIT_CHIEFTAIN};
+        int landed = 0;
+        for (int kind : kinds) {
+            while (landed < count && ship.getShipHR().exitUnit(race.getUnitTemplate(kind)) != null)
+                landed++;
+        }
+    }
+
+    /**
+     * Sends units of a kind out of a building, making those it lacks as far as the tribe has room: quarters send
+     * peons, an armory or a ship the kind asked for, and a tower its guard.
+     */
+    private void deployFrom(@NonNull Building building, @NonNull DeployType type, int count) {
+        Player owner = building.getOwner();
+        if (building instanceof Ship ship) {
+            if (ship.getShipHR() == null)
+                return;
+            Race race = owner.getRace();
+            int have = ship.getShipHR().countUnitsOfType(type == DeployType.PEON ? Unit.class : weaponOf(type));
+            for (int i = have; i < count && !owner.getUnitCountContainer().isSupplyFull(); i++) {
+                Unit unit = new Unit(owner, ship.getPositionX(), ship.getPositionY(), null,
+                        race.getUnitTemplate(unitType(type)));
+                if (ship.getUnitContainer().canEnter(unit)) {
+                    ship.getUnitContainer().enter(unit);
+                } else {
+                    unit.removeNow();
+                    break;
+                }
+            }
+            unload(ship, count, type);
+            return;
+        }
+        if (building.getUnitContainer() == null)
+            return;
+        if (building.getUnitContainer() instanceof com.oddlabs.tt.model.MountUnitContainer) {
+            emptyTower(building);
+            return;
+        }
+        // Quarters only bring forth peons.
+        DeployType sent = building.getAbilities().hasAbilities(Abilities.BUILD_ARMIES) ? type : DeployType.PEON;
+        if (building.getDeployContainer(sent) == null)
+            return;
+        int inside = building.getUnitContainer().getNumSupplies();
+        int room = owner.getWorld().getMaxUnitCount() - owner.getUnitCountContainer().getNumSupplies();
+        int missing = Math.clamp(count - inside, 0, Math.max(0, room));
+        if (missing > 0)
+            building.getUnitContainer().increaseSupply(missing);
+        if (sent != DeployType.PEON)
+            building.fillSupplies(weaponOf(sent), count);
+        owner.deployUnits(building, sent, count);
+    }
+
+    private static int unitType(@NonNull DeployType type) {
+        return switch (type) {
+            case ROCK_WARRIOR -> Race.UNIT_WARRIOR_ROCK;
+            case IRON_WARRIOR -> Race.UNIT_WARRIOR_IRON;
+            case RUBBER_WARRIOR -> Race.UNIT_WARRIOR_RUBBER;
+            default -> Race.UNIT_PEON;
+        };
+    }
+
+    private static @NonNull Class<?> weaponOf(@NonNull DeployType type) {
+        return switch (type) {
+            case ROCK_WARRIOR -> RockAxeWeapon.class;
+            case RUBBER_WARRIOR -> RubberAxeWeapon.class;
+            default -> IronAxeWeapon.class;
+        };
+    }
+
+    /** Sets statues down on free land at random spots in an area. */
+    private void spawnStatues(Scenario.@NonNull Area area, int count) {
+        for (int i = 0; i < count; i++) {
+            for (int attempt = 0; attempt < STATUE_TRIES; attempt++) {
+                double angle = random.nextDouble() * 2 * Math.PI;
+                float distance = (float) Math.sqrt(random.nextFloat()) * area.radius;
+                int x = UnitGrid.toGridCoordinate(area.x + distance * (float) Math.cos(angle));
+                int y = UnitGrid.toGridCoordinate(area.y + distance * (float) Math.sin(angle));
+                if (newStatue(x, y, random.nextInt(ObjectKind.STATUE_VARIANTS), random.nextInt()) != null)
+                    break;
+            }
+        }
     }
 
     /** Sets a computer player's AI, stopping the one it had. */
@@ -583,12 +836,42 @@ final class ScenarioRunner {
         return count;
     }
 
-    private static boolean hasUnitNear(@NonNull Player player, @NonNull Selectable<?> object, float radius) {
+    /**
+     * Where a placed object is while it stands: a live unit or building, or a statue not yet taken away.
+     *
+     * @return x and y in meters, or null when it is gone
+     */
+    private float @Nullable [] whereIs(int id) {
+        Selectable<?> object = objects.get(id);
+        if (object != null)
+            return object.isDead() ? null : new float[]{object.getPositionX(), object.getPositionY()};
+        SceneryModel statue = placed_statues.get(id);
+        return statue != null && statues.contains(statue)
+                ? new float[]{statue.getPositionX(), statue.getPositionY()} : null;
+    }
+
+    /** The statues standing in an area, or anywhere when there is no area. */
+    private @NonNull List<@NonNull SceneryModel> statuesIn(Scenario.@Nullable Area area) {
+        List<SceneryModel> found = new ArrayList<>();
+        for (SceneryModel statue : statues) {
+            if (area == null || area.contains(statue.getPositionX(), statue.getPositionY()))
+                found.add(statue);
+        }
+        return found;
+    }
+
+    /**
+     * Whether a unit of the player is within a radius of a spot.
+     *
+     * @param self the object at the spot, which does not count itself, or null
+     */
+    private static boolean hasUnitNear(@NonNull Player player, @Nullable Selectable<?> self, float @NonNull [] at,
+            float radius) {
         for (Unit unit : unitsOf(player)) {
-            if (unit == object)
+            if (unit == self)
                 continue;
-            float dx = unit.getPositionX() - object.getPositionX();
-            float dy = unit.getPositionY() - object.getPositionY();
+            float dx = unit.getPositionX() - at[0];
+            float dy = unit.getPositionY() - at[1];
             if (dx * dx + dy * dy <= radius * radius)
                 return true;
         }

@@ -33,6 +33,10 @@ final class CustomIsland extends Island {
     protected void init(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root) {
         CampaignFile.Level level = campaign.getLevel(index);
         MapSettings settings = level.settings;
+        // A level that starts with ships plays with them, on any island.
+        boolean ships = settings.isArchipelago();
+        for (Scenario.Placement placement : level.scenario.placements)
+            ships |= placement.kind().isShip();
         // spotless:off
         WorldParameters world_params = WorldParameters.builder()
                 .initialGameSpeed(Game.GAMESPEED_NORMAL)
@@ -40,7 +44,7 @@ final class CustomIsland extends Island {
                 .initialUnitCount(1)
                 .maxUnitCount(Player.DEFAULT_MAX_UNIT_COUNT)
                 .mapSize(settings.size())
-                .ships(Globals.SHIPS_ENABLED && settings.isArchipelago())
+                .ships(Globals.SHIPS_ENABLED && ships)
                 .build();
         // spotless:on
         String[] ai_names = new String[Scenario.NUM_PLAYERS];

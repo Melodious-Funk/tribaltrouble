@@ -3,6 +3,7 @@ package com.oddlabs.tt.mapeditor;
 import org.jspecify.annotations.NonNull;
 
 import static com.oddlabs.tt.mapeditor.Param.AREA;
+import static com.oddlabs.tt.mapeditor.Param.BUILDING;
 import static com.oddlabs.tt.mapeditor.Param.COUNT;
 import static com.oddlabs.tt.mapeditor.Param.DEPLOY_TYPE;
 import static com.oddlabs.tt.mapeditor.Param.FACE;
@@ -12,6 +13,7 @@ import static com.oddlabs.tt.mapeditor.Param.OBJECT;
 import static com.oddlabs.tt.mapeditor.Param.PLAYER;
 import static com.oddlabs.tt.mapeditor.Param.ROLE;
 import static com.oddlabs.tt.mapeditor.Param.SECONDS;
+import static com.oddlabs.tt.mapeditor.Param.TEAM;
 import static com.oddlabs.tt.mapeditor.Param.TARGET_PLAYER;
 import static com.oddlabs.tt.mapeditor.Param.TEXT;
 import static com.oddlabs.tt.mapeditor.Param.TRIGGER;
@@ -59,7 +61,21 @@ enum ActionKind {
     /** Wins the level and opens the next one. */
     VICTORY("action_victory"),
     /** Loses the level, with a message. */
-    DEFEAT("action_defeat", TEXT);
+    DEFEAT("action_defeat", TEXT),
+    /** Puts a tribe on another team, making friends of foes or foes of friends. */
+    SET_TEAM("action_set_team", PLAYER, TEAM),
+    /** Sends a placed unit into a tower or onto a ship. */
+    ENTER_BUILDING("action_enter_building", OBJECT, BUILDING),
+    /** Sends a player's units in an area into a tower or onto a ship. */
+    BOARD_FROM_AREA("action_board_from_area", PLAYER, AREA, BUILDING, COUNT),
+    /** Brings the units in a tower or on a ship out. */
+    LEAVE_BUILDING("action_leave_building", BUILDING),
+    /** Sends units out of a building, of a kind it can send, making those it lacks. */
+    DEPLOY_FROM("action_deploy_from", BUILDING, DEPLOY_TYPE, COUNT),
+    /** Puts golden statues in an area. */
+    SPAWN_STATUES("action_spawn_statues", AREA, COUNT),
+    /** Takes the golden statues in an area away, as raiders carry them off. */
+    REMOVE_STATUES("action_remove_statues", AREA);
 
     private final @NonNull String key;
     private final @NonNull Param @NonNull [] params;

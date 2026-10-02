@@ -16,6 +16,7 @@ final class Step {
     private int other_player;
     private int area = -1;
     private int object = -1;
+    private int building = -1;
     private int amount;
     private int type;
     private int trigger = -1;
@@ -75,8 +76,9 @@ final class Step {
             case TARGET_PLAYER, NEW_OWNER -> other_player;
             case AREA -> area;
             case OBJECT -> object;
+            case BUILDING -> building;
             case COUNT, SECONDS, RADIUS -> amount;
-            case UNIT_TYPE, DEPLOY_TYPE, SUPPLY_TYPE, MAGIC, ROLE, FACE -> type;
+            case UNIT_TYPE, DEPLOY_TYPE, SUPPLY_TYPE, MAGIC, ROLE, FACE, TEAM -> type;
             case TRIGGER -> trigger;
             case HEADER, TEXT -> throw new IllegalArgumentException(param + " is text");
         };
@@ -88,8 +90,9 @@ final class Step {
             case TARGET_PLAYER, NEW_OWNER -> other_player = value;
             case AREA -> area = value;
             case OBJECT -> object = value;
+            case BUILDING -> building = value;
             case COUNT, SECONDS, RADIUS -> amount = value;
-            case UNIT_TYPE, DEPLOY_TYPE, SUPPLY_TYPE, MAGIC, ROLE, FACE -> type = value;
+            case UNIT_TYPE, DEPLOY_TYPE, SUPPLY_TYPE, MAGIC, ROLE, FACE, TEAM -> type = value;
             case TRIGGER -> trigger = value;
             case HEADER, TEXT -> throw new IllegalArgumentException(param + " is text");
         }
@@ -112,6 +115,7 @@ final class Step {
         step.other_player = other_player;
         step.area = area;
         step.object = object;
+        step.building = building;
         step.amount = amount;
         step.type = type;
         step.trigger = trigger;
@@ -120,12 +124,14 @@ final class Step {
         return step;
     }
 
+    /** Writes the step as {@link Scenario}'s current version keeps it. */
     void write(@NonNull DataOutputStream out) throws IOException {
         out.writeShort(kind);
         out.writeByte(player);
         out.writeByte(other_player);
         out.writeInt(area);
         out.writeInt(object);
+        out.writeInt(building);
         out.writeInt(amount);
         out.writeShort(type);
         out.writeInt(trigger);
@@ -133,12 +139,18 @@ final class Step {
         out.writeUTF(text);
     }
 
-    static @NonNull Step read(@NonNull DataInputStream in) throws IOException {
+    /**
+     * Reads a step as a level of the given {@link Scenario} version keeps it.
+     *
+     * @param version the level's version; steps of version 1 have no building
+     */
+    static @NonNull Step read(@NonNull DataInputStream in, int version) throws IOException {
         Step step = new Step(in.readShort());
         step.player = Math.clamp(in.readByte(), 0, Scenario.NUM_PLAYERS - 1);
         step.other_player = Math.clamp(in.readByte(), 0, Scenario.NUM_PLAYERS - 1);
         step.area = in.readInt();
         step.object = in.readInt();
+        step.building = version >= 2 ? in.readInt() : -1;
         step.amount = in.readInt();
         step.type = in.readShort();
         step.trigger = in.readInt();

@@ -22,7 +22,8 @@ import java.util.List;
 final class Scenario {
     static final int NUM_PLAYERS = MatchmakingServerInterface.MAX_PLAYERS;
 
-    private static final int VERSION = 1;
+    // Version 2 gave trigger steps a building beside their object.
+    private static final int VERSION = 2;
     private static final int MAX_ITEMS = 100_000;
 
     /** How a player is run. */
@@ -225,7 +226,8 @@ final class Scenario {
                 continue;
             boolean has_units = false;
             for (Placement placement : placements)
-                has_units |= placement.player() == i && !placement.kind().isBuilding();
+                has_units |= placement.player() == i && (placement.kind().isUnit()
+                        || placement.kind().getGuardType() != -1);
             if (!has_units)
                 problems.add(i == 0 ? CampaignEditor.i18n("problem_no_player_units")
                         : CampaignEditor.i18n("problem_no_units", playerName(i)));
@@ -242,10 +244,108 @@ final class Scenario {
         }
         if (!victory)
             problems.add(CampaignEditor.i18n("problem_no_victory"));
+        for (Trigger trigger : triggers) {
+            ConditionKind condition = ConditionKind.of(trigger.condition.kind);
+            checkStep(trigger, trigger.condition, true, condition.getName(), condition.getParams(),
+                    isAreaOptional(true, trigger.condition), problems);
+            for (Step action : trigger.actions) {
+                ActionKind kind = ActionKind.of(action.kind);
+                checkStep(trigger, action, false, kind.getName(), kind.getParams(),
+                        isAreaOptional(false, action), problems);
+                if (kind == ActionKind.DEPLOY_FROM)
+                    checkDeploy(trigger, action, problems);
+            }
+        }
         return problems;
     }
 
+    /**
+     * Notes what a step names that is not set, gone, of the wrong kind, or a tribe not taking part.
+     *
+     * @param condition whether the step is the trigger's condition rather than one of its actions
+     * @param area_optional whether leaving its area unset is fine, meaning anywhere
+     */
+    private void checkStep(@NonNull Trigger trigger, @NonNull Step step, boolean condition, @NonNull String step_name,
+            @NonNull Param @NonNull [] params, boolean area_optional, @NonNull List<@NonNull String> problems) {
+        for (Param param : params) {
+            String what = param.getCaption().replace(":", "").toLowerCase(java.util.Locale.ROOT);
+            switch (param) {
+                case PLAYER, TARGET_PLAYER, NEW_OWNER -> {
+                    int player = step.get(param);
+                    if (!players[player].enabled)
+                        problems.add(CampaignEditor.i18n("problem_absent_player", trigger.name, step_name,
+                                playerName(player)));
+                }
+                case AREA, TRIGGER -> {
+                    int id = step.get(param);
+                    if (id == -1) {
+                        if (!(param == Param.AREA && area_optional))
+                            problems.add(CampaignEditor.i18n("problem_unset", trigger.name, step_name, what));
+                    } else if (param == Param.AREA ? findArea(id) == null : findTrigger(id) == null) {
+                        problems.add(CampaignEditor.i18n("problem_missing", trigger.name, step_name, what));
+                    }
+                }
+                case OBJECT, BUILDING -> {
+                    int id = step.get(param);
+                    Placement placement = id != -1 ? findPlacement(id) : null;
+                    if (id == -1)
+                        problems.add(CampaignEditor.i18n("problem_unset", trigger.name, step_name, what));
+                    else if (placement == null)
+                        problems.add(CampaignEditor.i18n("problem_missing", trigger.name, step_name, what));
+                    else if (!fits(condition, step, param, placement.kind()))
+                        problems.add(CampaignEditor.i18n("problem_wrong_object", trigger.name, step_name,
+                                describePlacement(placement), CampaignEditor.i18n(wanted(condition, step, param))));
+                }
+                default -> {
+                }
+            }
+        }
+    }
+
+    /** Whether a step may leave its area unset, meaning the whole island. */
+    static boolean isAreaOptional(boolean condition, @NonNull Step step) {
+        return condition ? ConditionKind.of(step.kind) == ConditionKind.STATUES_LEFT
+                : ActionKind.of(step.kind) == ActionKind.REMOVE_STATUES;
+    }
+
+    /** Whether a placed object is of a kind a step's setting can name. */
+    static boolean fits(boolean condition, @NonNull Step step, @NonNull Param param, @NonNull ObjectKind kind) {
+        boolean deploy = !condition && ActionKind.of(step.kind) == ActionKind.DEPLOY_FROM;
+        if (param == Param.BUILDING)
+            return deploy ? kind.isBuilding() : kind.holdsUnits();
+        if (condition)
+            return true;
+        return switch (ActionKind.of(step.kind)) {
+            case ENTER_BUILDING, CHANGE_OWNER_OBJECT -> kind.isUnit();
+            default -> true;
+        };
+    }
+
+    /** The key of what a step's setting wants, to explain a wrong pick. */
+    static @NonNull String wanted(boolean condition, @NonNull Step step, @NonNull Param param) {
+        if (param == Param.BUILDING)
+            return !condition && ActionKind.of(step.kind) == ActionKind.DEPLOY_FROM ? "wants_building"
+                    : "wants_holder";
+        return "wants_unit";
+    }
+
+    /** What a building can send out: quarters only peons, a tower only warriors. */
+    private void checkDeploy(@NonNull Trigger trigger, @NonNull Step step, @NonNull List<@NonNull String> problems) {
+        Placement placement = findPlacement(step.get(Param.BUILDING));
+        if (placement == null)
+            return;
+        boolean peons = Param.DEPLOY_TYPES[Math.clamp(step.get(Param.DEPLOY_TYPE), 0, Param.DEPLOY_TYPES.length - 1)]
+                == com.oddlabs.tt.model.DeployType.PEON;
+        String name = ActionKind.DEPLOY_FROM.getName();
+        if (placement.kind() == ObjectKind.QUARTERS && !peons)
+            problems.add(CampaignEditor.i18n("problem_quarters_peons", trigger.name, name));
+        else if (placement.kind().isTower() && peons)
+            problems.add(CampaignEditor.i18n("problem_tower_warriors", trigger.name, name));
+    }
+
     @NonNull String describePlacement(@NonNull Placement placement) {
+        if (!placement.kind().hasOwner())
+            return CampaignEditor.i18n("object_label_unowned", placement.kind().getName(), placement.id());
         return CampaignEditor.i18n("object_label", placement.kind().getName(), playerName(placement.player()),
                 placement.id());
     }
@@ -263,10 +363,12 @@ final class Scenario {
         return users;
     }
 
+    /** Whether a step names an id with a setting of the param's sort: an object or building counting as one. */
     private static boolean uses(@NonNull Step step, @NonNull Param @NonNull [] params, @NonNull Param param,
             int id) {
         for (Param p : params) {
-            if (p == param && step.get(p) == id)
+            boolean same = p == param || (p.isObject() && param.isObject());
+            if (same && step.get(p) == id)
                 return true;
         }
         return false;
@@ -274,6 +376,11 @@ final class Scenario {
 
     /** A setting's value as a person reads it. */
     @NonNull String describe(@NonNull Step step, @NonNull Param param) {
+        return describe(step, param, false);
+    }
+
+    /** @param area_optional whether an unset area means the whole island */
+    private @NonNull String describe(@NonNull Step step, @NonNull Param param, boolean area_optional) {
         if (param.isText()) {
             String text = step.getText(param).replace('\n', ' ');
             return text.length() > 24 ? "\"" + text.substring(0, 22) + "...\"" : "\"" + text + "\"";
@@ -282,7 +389,9 @@ final class Scenario {
         String[] choices = param.getChoices();
         if (choices != null)
             return choices[Math.clamp(value, 0, choices.length - 1)];
-        if (value == -1 && (param == Param.AREA || param == Param.OBJECT || param == Param.TRIGGER))
+        if (value == -1 && param == Param.AREA && area_optional)
+            return CampaignEditor.i18n("whole_island");
+        if (value == -1 && (param == Param.AREA || param.isObject() || param == Param.TRIGGER))
             return CampaignEditor.i18n("none");
         return switch (param) {
             case PLAYER, TARGET_PLAYER, NEW_OWNER -> playerName(value);
@@ -290,7 +399,7 @@ final class Scenario {
                 Area area = findArea(value);
                 yield area != null ? area.name : CampaignEditor.i18n("missing");
             }
-            case OBJECT -> {
+            case OBJECT, BUILDING -> {
                 Placement placement = findPlacement(value);
                 yield placement != null ? describePlacement(placement) : CampaignEditor.i18n("missing");
             }
@@ -306,22 +415,23 @@ final class Scenario {
 
     @NonNull String describeCondition(@NonNull Step step) {
         ConditionKind kind = ConditionKind.of(step.kind);
-        return describe(step, kind.getName(), kind.getParams());
+        return describe(step, kind.getName(), kind.getParams(), isAreaOptional(true, step));
     }
 
     @NonNull String describeAction(@NonNull Step step) {
         ActionKind kind = ActionKind.of(step.kind);
-        return describe(step, kind.getName(), kind.getParams());
+        return describe(step, kind.getName(), kind.getParams(), isAreaOptional(false, step));
     }
 
-    private @NonNull String describe(@NonNull Step step, @NonNull String name, @NonNull Param @NonNull [] params) {
+    private @NonNull String describe(@NonNull Step step, @NonNull String name, @NonNull Param @NonNull [] params,
+            boolean area_optional) {
         if (params.length == 0)
             return name;
         StringBuilder text = new StringBuilder(name).append(": ");
         for (int i = 0; i < params.length; i++) {
             if (i > 0)
                 text.append(", ");
-            text.append(describe(step, params[i]));
+            text.append(describe(step, params[i], area_optional));
         }
         return text.toString();
     }
@@ -410,13 +520,13 @@ final class Scenario {
             boolean active = in.readBoolean();
             boolean repeat = in.readBoolean();
             int difficulties = in.readByte();
-            Trigger trigger = new Trigger(id, name, Step.read(in));
+            Trigger trigger = new Trigger(id, name, Step.read(in, version));
             trigger.active = active;
             trigger.repeat = repeat;
             trigger.difficulties = difficulties & Trigger.ALL_DIFFICULTIES;
             int actions = readCount(in);
             for (int a = 0; a < actions; a++)
-                trigger.actions.add(Step.read(in));
+                trigger.actions.add(Step.read(in, version));
             scenario.triggers.add(trigger);
         }
         return scenario;
