@@ -10,17 +10,17 @@ public final class InGameCampaignDialogForm extends CampaignDialogForm {
     private final @NonNull WorldViewer viewer;
 
     public InGameCampaignDialogForm(@NonNull WorldViewer viewer, @NonNull CharSequence header,
-            @NonNull CharSequence text, @NonNull IconQuad image, @NonNull Origin align) {
+            @NonNull CharSequence text, @Nullable IconQuad image, @NonNull Origin align) {
         this(viewer, header, text, image, align, null);
     }
 
     public InGameCampaignDialogForm(@NonNull WorldViewer viewer, @NonNull CharSequence header,
-            @NonNull CharSequence text, @NonNull IconQuad image, @NonNull Origin align, @Nullable Runnable runnable) {
+            @NonNull CharSequence text, @Nullable IconQuad image, @NonNull Origin align, @Nullable Runnable runnable) {
         this(viewer, header, text, image, align, runnable, false);
     }
 
     public InGameCampaignDialogForm(@NonNull WorldViewer viewer, @NonNull CharSequence header,
-            @NonNull CharSequence text, @NonNull IconQuad image, @NonNull Origin align, @Nullable Runnable runnable,
+            @NonNull CharSequence text, @Nullable IconQuad image, @NonNull Origin align, @Nullable Runnable runnable,
             boolean cancel) {
         super(header, text, image, align, runnable, cancel);
         this.viewer = viewer;

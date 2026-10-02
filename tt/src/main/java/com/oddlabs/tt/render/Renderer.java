@@ -64,6 +64,7 @@ import java.time.Instant;
 import java.util.Locale;
 import java.util.ResourceBundle;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.FileHandler;
 import java.util.logging.Level;
@@ -580,7 +581,7 @@ public final class Renderer implements AutoCloseable {
         logger.info("Init done after " + startup_time_init + "ms");
         ambient = new AmbientAudio(AudioManager.getManager());
 
-        Runnable load_task = setupMainMenu(network, gui, true);
+        Runnable load_task = setupMainMenu(network, gui, true, null);
 
         boolean reset_keyboard = false;
         boolean wasActive = false;
@@ -699,19 +700,28 @@ public final class Renderer implements AutoCloseable {
     }
 
     public static void startMenu(@NonNull NetworkSelector network, @NonNull GUI gui) {
-        setupMainMenu(network, gui, false);
+        setupMainMenu(network, gui, false, null);
+    }
+
+    /**
+     * Goes back to the main menu and then hands it over, as to open one of its windows again.
+     */
+    public static void startMenu(@NonNull NetworkSelector network, @NonNull GUI gui,
+            @NonNull Consumer<@NonNull MainMenu> opened) {
+        setupMainMenu(network, gui, false, opened);
     }
 
     private static @Nullable Runnable setupMainMenu(final @NonNull NetworkSelector network, @NonNull GUI gui,
-            final boolean first_progress) {
+            final boolean first_progress, @Nullable Consumer<@NonNull MainMenu> opened) {
         final WorldGenerator generator = new IslandGenerator(256, Landscape.TerrainType.NATIVE, Globals.LANDSCAPE_HILLS,
                 Globals.LANDSCAPE_VEGETATION, Globals.LANDSCAPE_RESOURCES, Globals.LANDSCAPE_SEED, false);
         return ProgressForm.setProgressForm(network, gui, (GUIRoot gui_root) -> finishMainMenu(network, gui_root,
-                first_progress, generator), first_progress);
+                first_progress, generator, opened), first_progress);
     }
 
     private static @NonNull UIRenderer finishMainMenu(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root,
-            boolean first_progress, @NonNull WorldGenerator generator) {
+            boolean first_progress, @NonNull WorldGenerator generator,
+            @Nullable Consumer<@NonNull MainMenu> opened) {
         AnimationManager.freezeTime();
         PlayerInfo player_info = new PlayerInfo(0, 0, "");
         MatrixStack modelViewStack = new MatrixStack();
@@ -746,6 +756,9 @@ public final class Renderer implements AutoCloseable {
                     i18n("network_not_available_message"),
                     i18n("quit"), (_, _, _, _) -> shutdown()));
         }
+        // Once the network is up, as what opens may start a game.
+        if (opened != null)
+            opened.accept(main_menu);
         // We'll leave out the reporting, since checksum errors can happen when a peer is disconnected halfway through it's EOT
         // broadcast
         /*		if (Globals.checksum_error_in_last_game) {

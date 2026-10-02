@@ -26,6 +26,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Random;
+import java.util.function.Consumer;
 import java.util.function.IntFunction;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
@@ -64,6 +65,8 @@ public final class MapEditorForm extends Form {
     private float @Nullable [] @Nullable [] heights;
     private MapFile.@Nullable Resources resources;
     private boolean applying;
+    // Takes the island chosen, when the window picks one for a campaign level instead of starting the editor.
+    private final @Nullable Consumer<@NonNull MapFile> chosen;
 
     public MapEditorForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root) {
         this(network, gui_root, null);
@@ -76,13 +79,24 @@ public final class MapEditorForm extends Form {
      */
     public static @NonNull MapEditorForm forHosting(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root,
             @NonNull Runnable back) {
-        return new MapEditorForm(network, gui_root, back);
+        return new MapEditorForm(network, gui_root, back, null);
     }
 
-    private MapEditorForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @Nullable Runnable back) {
+    /**
+     * @param chosen takes the island for a campaign level, its settings and any saved edits, in place of starting the
+     *        editor; or null to start it
+     */
+    MapEditorForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root,
+            @Nullable Consumer<@NonNull MapFile> chosen) {
+        this(network, gui_root, null, chosen);
+    }
+
+    private MapEditorForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @Nullable Runnable back,
+            @Nullable Consumer<@NonNull MapFile> chosen) {
         this.network = network;
         this.gui_root = gui_root;
         this.back = back;
+        this.chosen = chosen;
         long tick = LocalEventQueue.getQueue().getHighPrecisionManager().getTick();
         this.settings = MapSettings.random(new Random(tick * tick));
 
@@ -146,7 +160,8 @@ public final class MapEditorForm extends Form {
         button_save.addMouseClickListener((_, _, _, _) -> save());
         HorizButton button_load = new HorizButton(MapEditor.i18n("load"), BUTTON_WIDTH);
         button_load.addMouseClickListener((_, _, _, _) -> load());
-        button_start = new HorizButton(MapEditor.i18n(back != null ? "session_host_button" : "start"), BUTTON_WIDTH);
+        button_start = new HorizButton(chosen != null ? CampaignEditor.i18n("add_island_button")
+                : MapEditor.i18n(back != null ? "session_host_button" : "start"), BUTTON_WIDTH);
         button_start.addMouseClickListener((_, _, _, _) -> start());
         HorizButton button_cancel = new CancelButton(BUTTON_WIDTH);
         button_cancel.addMouseClickListener((_, _, _, _) -> cancel());
@@ -172,6 +187,8 @@ public final class MapEditorForm extends Form {
         label_map.place(group_code, BOTTOM_LEFT);
         group_buttons.place(Origin.AT_END);
         compileCanvas();
+        if (chosen != null)
+            centerPos();
 
         refresh();
     }
@@ -328,6 +345,12 @@ public final class MapEditorForm extends Form {
     }
 
     private void start() {
+        if (chosen != null) {
+            remove();
+            MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources) : null;
+            chosen.accept(new MapFile(map_name != null ? map_name : "", settings, heights, resources, preview));
+            return;
+        }
         button_start.setDisabled(true);
         MapEditorLoader.SessionStart session = back == null ? new MapEditorLoader.SessionStart.None()
                 : new MapEditorLoader.SessionStart.Host(map_name != null ? map_name : MapEditor.i18n(

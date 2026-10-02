@@ -15,6 +15,7 @@ import org.jspecify.annotations.NonNull;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_RIGHT;
 import static com.oddlabs.tt.gui.Placement.LEFT_MID;
@@ -26,18 +27,33 @@ final class SaveMapDialog extends Form {
     private static final int EDITLINE_WIDTH = 280;
 
     private final @NonNull GUIRoot gui_root;
-    private final @NonNull Path dir;
+    private final @NonNull Function<@NonNull String, @NonNull Path> path_for;
+    private final @NonNull Function<@NonNull String, @NonNull String> overwrite_question;
     private final @NonNull Consumer<@NonNull String> save;
     private final @NonNull EditLine editline_name;
 
     SaveMapDialog(@NonNull GUIRoot gui_root, @NonNull Path dir, @NonNull String initial_name,
             @NonNull Consumer<@NonNull String> save) {
-        super(MapEditor.i18n("save_caption"));
+        this(gui_root, MapEditor.i18n("save_caption"), MapEditor.i18n("map_name"),
+                name -> MapFile.pathFor(dir, name), name -> MapEditor.i18n("overwrite_confirm", name), initial_name,
+                save);
+    }
+
+    /**
+     * @param path_for where a name is saved, to ask before replacing what is there
+     * @param overwrite_question the question asked before replacing it
+     */
+    SaveMapDialog(@NonNull GUIRoot gui_root, @NonNull String caption, @NonNull String name_caption,
+            @NonNull Function<@NonNull String, @NonNull Path> path_for,
+            @NonNull Function<@NonNull String, @NonNull String> overwrite_question, @NonNull String initial_name,
+            @NonNull Consumer<@NonNull String> save) {
+        super(caption);
         this.gui_root = gui_root;
-        this.dir = dir;
+        this.path_for = path_for;
+        this.overwrite_question = overwrite_question;
         this.save = save;
 
-        Label label_name = new Label(MapEditor.i18n("map_name"), Skin.getSkin().getEditFont());
+        Label label_name = new Label(name_caption, Skin.getSkin().getEditFont());
         editline_name = new EditLine(EDITLINE_WIDTH, MapFile.getMaxNameLength());
         editline_name.append(initial_name);
         editline_name.addEnterListener(_ -> submit());
@@ -75,8 +91,8 @@ final class SaveMapDialog extends Form {
             return;
         }
         remove();
-        if (Files.exists(MapFile.pathFor(dir, name))) {
-            gui_root.addModalForm(new QuestionForm(MapEditor.i18n("overwrite_confirm", name),
+        if (Files.exists(path_for.apply(name))) {
+            gui_root.addModalForm(new QuestionForm(overwrite_question.apply(name),
                     (_, _, _, _) -> save.accept(name)));
         } else {
             save.accept(name);

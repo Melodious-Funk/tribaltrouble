@@ -23,6 +23,8 @@ import com.oddlabs.tt.gui.Skin;
 import com.oddlabs.tt.guievent.EnterListener;
 import com.oddlabs.tt.guievent.ItemChosenListener;
 import com.oddlabs.tt.guievent.MouseClickListener;
+import com.oddlabs.tt.mapeditor.CampaignEditor;
+import com.oddlabs.tt.mapeditor.CustomCampaign;
 import com.oddlabs.tt.player.campaign.Campaign;
 import com.oddlabs.tt.player.campaign.CampaignState;
 import com.oddlabs.tt.player.campaign.NativeCampaign;
@@ -35,6 +37,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.FileNotFoundException;
 import java.io.InvalidClassException;
 import java.nio.file.NoSuchFileException;
+import java.util.List;
 import java.util.ResourceBundle;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
@@ -55,6 +58,8 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         return Utils.getBundleString(bundle, key, args);
     }
 
+    // Campaigns made in the campaign editor, listed after the two tribes' own.
+    private final @NonNull List<@NonNull String> custom_campaigns = CampaignEditor.playableCampaigns();
     private final @NonNull EditLine editline_name;
     private final @NonNull PulldownMenu<Void> race_pulldown;
     private final @NonNull PulldownMenu<Void> difficulty_pulldown;
@@ -85,8 +90,11 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         race_pulldown = new PulldownMenu<>();
         race_pulldown.addItem(new PulldownItem<>(i18n("vikings")));
         race_pulldown.addItem(new PulldownItem<>(i18n("natives")));
+        for (String custom : custom_campaigns)
+            race_pulldown.addItem(new PulldownItem<>(CampaignEditor.i18n("custom_campaign_item", custom)));
         race_pulldown.addItemChosenListener(new RaceListener());
-        PulldownButton<Void> race_pb = new PulldownButton<>(gui_root, race_pulldown, INDEX_VIKINGS, 100);
+        PulldownButton<Void> race_pb = new PulldownButton<>(gui_root, race_pulldown, INDEX_VIKINGS,
+                custom_campaigns.isEmpty() ? 100 : 240);
         group.addChild(race_label);
         group.addChild(race_pb);
 
@@ -173,8 +181,29 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         } else {
             new_states = new CampaignState[1];
         }
+        int difficulty = switch (difficulty_pulldown.getChosenItemIndex()) {
+            case 0 -> CampaignState.DIFFICULTY_EASY;
+            case 1 -> CampaignState.DIFFICULTY_NORMAL;
+            case 2 -> CampaignState.DIFFICULTY_HARD;
+            default -> throw new IllegalArgumentException();
+        };
+        int race_index = race_pulldown.getChosenItemIndex();
+        if (race_index >= 2) {
+            // A custom campaign opens on its list of levels, at the difficulty chosen here for every AI.
+            CampaignState state = CustomCampaign.newState(custom_campaigns.get(race_index - 2));
+            state.setName(name);
+            state.setDate(System.currentTimeMillis());
+            state.setDifficulty(difficulty);
+            CustomCampaign custom = CustomCampaign.open(gui_root, state);
+            if (custom == null)
+                return;
+            new_states[new_states.length - 1] = state;
+            LoadCampaignBox.saveSavegames(new_states, this);
+            custom.showLevels(network, main_menu);
+            return;
+        }
         Campaign campaign;
-        switch (race_pulldown.getChosenItemIndex()) {
+        switch (race_index) {
             case 0:
                 campaign = new VikingCampaign(network, gui_root);
                 campaign.getState().setRace(CampaignState.RACE_VIKINGS);
@@ -188,13 +217,6 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         }
         campaign.getState().setName(name);
         campaign.getState().setDate(System.currentTimeMillis());
-
-        int difficulty = switch (difficulty_pulldown.getChosenItemIndex()) {
-            case 0 -> CampaignState.DIFFICULTY_EASY;
-            case 1 -> CampaignState.DIFFICULTY_NORMAL;
-            case 2 -> CampaignState.DIFFICULTY_HARD;
-            default -> throw new IllegalArgumentException();
-        };
         campaign.getState().setDifficulty(difficulty);
         new_states[new_states.length - 1] = campaign.getState();
         LoadCampaignBox.saveSavegames(new_states, this);

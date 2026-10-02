@@ -3,6 +3,7 @@ package com.oddlabs.tt.mapeditor;
 import com.oddlabs.net.NetworkSelector;
 import com.oddlabs.tt.animation.Animated;
 import com.oddlabs.tt.animation.AnimationManager;
+import com.oddlabs.tt.animation.TimerAnimation;
 import com.oddlabs.tt.camera.Camera;
 import com.oddlabs.tt.camera.CameraHost;
 import com.oddlabs.tt.camera.CameraState;
@@ -36,6 +37,7 @@ import com.oddlabs.tt.input.InputPhase;
 import com.oddlabs.tt.input.Key;
 import com.oddlabs.tt.landscape.HeightMap;
 import com.oddlabs.tt.landscape.World;
+import com.oddlabs.tt.player.campaign.CampaignState;
 import com.oddlabs.tt.procedural.Landscape;
 import com.oddlabs.tt.render.LandscapeLocation;
 import com.oddlabs.tt.render.LandscapeRenderer;
@@ -80,7 +82,8 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
  * times a second, and each sees the others' cameras, brushes and edits in their colours. Undo takes back this
  * player's own edits only.
  */
-final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHost, MapCameraOwner {
+final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHost, MapCameraOwner,
+        CampaignTools.Host {
     private static final float MIN_RADIUS = 4f;
     private static final float MAX_RADIUS = 512f;
     private static final float RADIUS_STEP = 1.15f;
@@ -103,6 +106,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final float PRESENCE_KEEPALIVE = 1f;
     /** Seconds after another player's edit before the ground settles, as after a stroke of this player's. */
     private static final float REMOTE_QUIET = .5f;
+    /** Seconds from the main menu showing until a level test starts. */
+    private static final float TEST_START_DELAY = 1f;
 
     private final @NonNull NetworkSelector network;
     private final @NonNull World world;
@@ -137,6 +142,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // Resources the latest terrain edit left off the playable area; kept with it in the history until the next edit
     // or an undo, as the playable area catches up with an edit after the stroke ends.
     private ResourceLayer.@Nullable Stroke pruned;
+    // Likewise the units and buildings it left off the playable area, when editing a campaign level.
+    private ScenarioLayer.@Nullable Stroke pruned_objects;
     private float resource_timer;
     // Whether the resources differ from the generated ones, and whether they changed since the last save.
     private boolean resources_edited;
@@ -153,6 +160,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final @NonNull Label label_radius;
     private final @NonNull Label label_intensity;
     private final @NonNull Label label_hint;
+
+    // The campaign editor's tools and bar, when editing a campaign level, and whether its tool is the one in use.
+    private final @Nullable CampaignTools campaign;
+    private final @Nullable Form campaign_bar;
+    private boolean campaign_active;
+    // What the cursor points at, written on the hint line in place of the tool's hint.
+    private @Nullable String hover_text;
 
     private @Nullable String map_name;
     // Whether the heights differ from what the settings generate, so saving must keep them.
@@ -208,7 +222,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
             @NonNull AccessMap access_map, @NonNull TintOverlay tint, @NonNull ResourceLayer layer,
             @NonNull PlantLayer plants, @NonNull Water water, @NonNull MapSettings settings,
-            @Nullable String map_name, boolean edited, boolean resources_edited, SessionSync.@NonNull Link link) {
+            @Nullable String map_name, boolean edited, boolean resources_edited, SessionSync.@NonNull Link link,
+            @Nullable CampaignTools campaign) {
         super(gui_root, null);
         this.link = link;
         this.network = network;
@@ -226,6 +241,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.edited = edited;
         this.layer = layer;
         this.resources_edited = resources_edited;
+        this.campaign = campaign;
 
         game_camera = new EditorCamera(this, camera_state);
         setCamera(game_camera);
@@ -247,21 +263,25 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         PulldownButton<Brush> pulldown_terrain = new PulldownButton<>(gui_root, menu_terrain, 0, PULLDOWN_WIDTH);
         PulldownButton<Brush> pulldown_resource = new PulldownButton<>(gui_root, menu_resource, 0, PULLDOWN_WIDTH);
         radio_terrain.addMouseClickListener((_, _, _, _) -> {
+            campaign_active = false;
             selectBrush(chosen(menu_terrain));
             setFocus();
         });
         radio_resource.addMouseClickListener((_, _, _, _) -> {
+            campaign_active = false;
             selectBrush(chosen(menu_resource));
             setFocus();
         });
         // Choosing from a dropdown also switches to it.
         menu_terrain.addItemChosenListener((menu, _) -> {
             tools.mark(radio_terrain);
+            campaign_active = false;
             selectBrush(chosen(menu));
             setFocus();
         });
         menu_resource.addItemChosenListener((menu, _) -> {
             tools.mark(radio_resource);
+            campaign_active = false;
             selectBrush(chosen(menu));
             setFocus();
         });
@@ -345,6 +365,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         group_overlay.place(check_wireframe, RIGHT_MID, 20);
         toolbar.compileCanvas();
         addChild(toolbar);
+        if (campaign != null) {
+            campaign_bar = campaign.createBar(this, tools);
+            addChild(campaign_bar);
+        } else {
+            campaign_bar = null;
+        }
 
         refreshLabels();
     }
@@ -385,7 +411,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
      * A terrain stroke in the undo history, with the resources it left off the playable area. The terrain editor
      * keeps what it changed in the heights.
      */
-    private record TerrainStep(ResourceLayer.@NonNull Stroke pruned) {
+    private record TerrainStep(ResourceLayer.@NonNull Stroke pruned, ScenarioLayer.@Nullable Stroke pruned_objects) {
     }
 
     /**
@@ -440,6 +466,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     public void displayChangedNotify(int width, int height) {
         super.displayChangedNotify(width, height);
         toolbar.setPos((width - toolbar.getWidth()) / 2, height - toolbar.getHeight());
+        if (campaign_bar != null)
+            campaign_bar.setPos((width - campaign_bar.getWidth()) / 2, 0);
         placeLegend();
         if (remotes != null)
             remotes.setRosterTop(rosterTop());
@@ -489,8 +517,18 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         world.tick(t);
         manager.runAnimations(t);
         has_cursor = !map_mode && pickCursor();
-        if (stroke_sign != 0 && has_cursor && !brush.isDragShape())
+        if (stroke_sign != 0 && has_cursor && campaign_active && campaign != null)
+            campaign.paint(t, cursor_x, cursor_y);
+        else if (stroke_sign != 0 && has_cursor && !brush.isDragShape())
             paint(t);
+        if (campaign != null) {
+            String text = campaign.hover(has_cursor && getGUIRoot().getModalDelegate() == null, cursor_x,
+                    cursor_y);
+            if (!Objects.equals(text, hover_text)) {
+                hover_text = text;
+                refreshLabels();
+            }
+        }
         editor.flush();
         updateSession(t);
         updateGround(t);
@@ -508,7 +546,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             return false;
         cursor_x = location.x;
         cursor_y = location.y;
-        if (stroke_sign == 0 || brush.isDragShape())
+        if (stroke_sign == 0 || brush.isDragShape() || campaign_active)
             return true;
         CameraState state = game_camera.getState();
         float eye_x = state.getCurrentX();
@@ -544,18 +582,52 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         refreshLabels();
     }
 
-    private void refreshLabels() {
+    // ---- Campaign tools ----
+
+    @Override
+    public void campaignToolChosen() {
+        cancelStroke();
+        campaign_active = true;
+        refreshLabels();
+        setFocus();
+    }
+
+    @Override
+    public float getRadius() {
+        return radius;
+    }
+
+    @Override
+    public float getDensity() {
+        return intensity / 100f;
+    }
+
+    @Override
+    public void refreshLabels() {
         label_radius.clear();
         label_radius.append(MapEditor.i18n("radius", Math.round(radius)));
         label_intensity.clear();
         label_intensity.append(MapEditor.i18n("intensity", intensity));
         label_hint.clear();
-        label_hint.append(brush == Brush.COPY && clipboard != null ? MapEditor.i18n("hint_paste") : brush.getHint());
+        if (hover_text != null)
+            label_hint.append(hover_text);
+        else if (campaign != null && (campaign_active || campaign.isPicking()))
+            label_hint.append(campaign.getHint());
+        else
+            label_hint.append(brush == Brush.COPY && clipboard != null ? MapEditor.i18n("hint_paste")
+                    : brush.getHint());
     }
 
     private void beginStroke(int sign) {
         if (stroke_sign != 0)
             return;
+        if (campaign_active && campaign != null) {
+            if (!has_cursor)
+                return;
+            stroke_sign = sign;
+            campaign.begin(sign, cursor_x, cursor_y);
+            return;
+        }
         if (brush.isCourse()) {
             if (sign > 0)
                 addCoursePoint();
@@ -590,7 +662,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         beginTerrainStroke();
     }
 
-    private void remember(@NonNull Object step) {
+    @Override
+    public void remember(@NonNull Object step) {
         history.push(step);
         while (history.size() > TerrainEditor.MAX_UNDO_STEPS)
             history.removeLast();
@@ -598,16 +671,19 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     private void beginTerrainStroke() {
         pruned = new ResourceLayer.Stroke();
+        pruned_objects = campaign != null ? new ScenarioLayer.Stroke() : null;
         editor.beginStroke();
     }
 
     /** Ends the terrain editor's stroke and, if it changed anything, records it to undo. */
     private void finishTerrainStroke() {
         ResourceLayer.Stroke stroke = pruned;
-        if (editor.endStroke() && stroke != null)
-            remember(new TerrainStep(stroke));
-        else
+        if (editor.endStroke() && stroke != null) {
+            remember(new TerrainStep(stroke, pruned_objects));
+        } else {
             pruned = null;
+            pruned_objects = null;
+        }
     }
 
     private void finishResourceStroke() {
@@ -668,11 +744,18 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             resources_modified = true;
             ground_settle = true;
         }
+        if (campaign != null)
+            campaign.getLayer().prune(pruned_objects != null ? pruned_objects : new ScenarioLayer.Stroke());
     }
 
     private void endStroke() {
         if (stroke_sign == 0)
             return;
+        if (campaign_active && campaign != null) {
+            campaign.end(true);
+            stroke_sign = 0;
+            return;
+        }
         ground_settle = true;
         if (brush.isResourceBrush()) {
             finishResourceStroke();
@@ -794,6 +877,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         int y0 = pasteY(copy);
         beginTerrainStroke();
         ResourceLayer.Stroke terrain_pruned = pruned;
+        ScenarioLayer.Stroke terrain_pruned_objects = pruned_objects;
         editor.paste(copy.heights(), x0, y0, intensity / 100f, keep_heights);
         // Resources only go on playable ground, so the heights must reach it, and the sort follow, before they do.
         editor.flush();
@@ -802,11 +886,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         ResourceLayer.Stroke placed = new ResourceLayer.Stroke();
         layer.paste(copy.resources(), x0, y0, copy.width(), copy.height(), placed);
         boolean heights_changed = editor.endStroke();
-        if (!heights_changed)
+        if (!heights_changed) {
             pruned = null;
+            pruned_objects = null;
+        }
         if (heights_changed || !placed.isEmpty()) {
-            remember(new PasteStep(heights_changed && terrain_pruned != null ? new TerrainStep(terrain_pruned) : null,
-                    placed));
+            remember(new PasteStep(heights_changed && terrain_pruned != null ? new TerrainStep(terrain_pruned,
+                    terrain_pruned_objects) : null, placed));
             resources_edited = true;
             resources_modified = true;
         }
@@ -826,7 +912,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     /** Drops a stroke without laying a pending ramp, keeping whatever was already painted as one undo step. */
     private void cancelStroke() {
-        if (stroke_sign != 0 && brush.isResourceBrush()) {
+        if (stroke_sign != 0 && campaign_active && campaign != null) {
+            campaign.end(false);
+        } else if (stroke_sign != 0 && brush.isResourceBrush()) {
             finishResourceStroke();
             ground_settle = true;
         } else if (stroke_sign != 0 && !brush.isDragShape()) {
@@ -875,9 +963,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         ground_settle = true;
         Object step = history.poll();
         pruned = null;
+        pruned_objects = null;
         if (step instanceof ResourceLayer.Stroke stroke) {
             layer.undo(stroke);
             resources_modified = true;
+        } else if (step instanceof ScenarioLayer.Stroke objects && campaign != null) {
+            campaign.getLayer().undo(objects);
         } else if (step instanceof TerrainStep terrain) {
             undoTerrain(terrain);
         } else if (step instanceof PasteStep paste) {
@@ -892,11 +983,16 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     }
 
     private void undoTerrain(@NonNull TerrainStep terrain) {
+        if (!editor.undo())
+            return;
         // Their cells rejoin the playable area with the heights, so they are not pruned again.
-        if (editor.undo() && !terrain.pruned().isEmpty()) {
+        if (!terrain.pruned().isEmpty()) {
             layer.undo(terrain.pruned());
             resources_modified = true;
         }
+        ScenarioLayer.Stroke objects = terrain.pruned_objects();
+        if (objects != null && !objects.isEmpty() && campaign != null)
+            campaign.getLayer().undo(objects);
     }
 
     // ---- Mouse and keys ----
@@ -908,14 +1004,26 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     }
 
     private boolean isOverToolbar(int x, int y) {
-        return x >= toolbar.getX() && x < toolbar.getX() + toolbar.getWidth() && y >= toolbar.getY()
-                && y < toolbar.getY() + toolbar.getHeight();
+        return isOver(toolbar, x, y) || (campaign_bar != null && isOver(campaign_bar, x, y));
+    }
+
+    private static boolean isOver(@NonNull Form form, int x, int y) {
+        return x >= form.getX() && x < form.getX() + form.getWidth() && y >= form.getY()
+                && y < form.getY() + form.getHeight();
     }
 
     @Override
     public void mousePressed(@NonNull MouseButton button, int x, int y) {
         if (map_mode || isOverToolbar(x, y))
             return;
+        if (campaign != null && campaign.isPicking() && button != MouseButton.MIDDLE) {
+            // Picking for a trigger: left takes what is under the cursor, right calls it off.
+            if (button == MouseButton.RIGHT)
+                campaign.cancelPick();
+            else if (has_cursor)
+                campaign.pickAt(cursor_x, cursor_y);
+            return;
+        }
         switch (button) {
             case LEFT -> beginStroke(1);
             case RIGHT -> beginStroke(-1);
@@ -972,7 +1080,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         // The per key state, since on some platforms the modifier flags stay set after the key is let go.
         var input = Renderer.getLocalInput();
         int steps = Integer.signum(amount);
-        if (input.isKeyDown(Key.LCONTROL) || input.isKeyDown(Key.RCONTROL)) {
+        if ((input.isKeyDown(Key.LCONTROL) || input.isKeyDown(Key.RCONTROL)) && campaign_active
+                && campaign != null && campaign.resizeHovered(steps)) {
+            refreshLabels();
+        } else if (input.isKeyDown(Key.LCONTROL) || input.isKeyDown(Key.RCONTROL)) {
             radius = Math.clamp(steps > 0 ? radius * RADIUS_STEP : radius / RADIUS_STEP, MIN_RADIUS, MAX_RADIUS);
             refreshLabels();
         } else if (isShiftDown()) {
@@ -1013,7 +1124,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 return;
             }
             if (event.consumeAction(GameAction.GLOBAL_MENU) || event.consumeAction(GameAction.UI_CANCEL)) {
-                openMenu();
+                if (campaign != null && campaign.isPicking())
+                    campaign.cancelPick();
+                else
+                    openMenu();
                 event.consume();
                 return;
             }
@@ -1028,7 +1142,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
      */
     private boolean handleBrushKey(@NonNull InputEvent event) {
         Key key = event.getKeyCode();
-        if (key == null || event.isControlDown() || event.isAltDown())
+        if (key == null || event.isControlDown() || event.isAltDown() || campaign_active
+                || (campaign != null && campaign.isPicking()))
             return false;
         if (brush.isCourse()) {
             switch (key) {
@@ -1080,20 +1195,28 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             }
             others.renderCameras(Renderer.getRenderer().getRenderContext(), state);
         }
-        if (map_mode || getGUIRoot().getModalDelegate() != null)
-            return;
-        if (!has_cursor && course.isEmpty())
+        // The campaign's markers stay while windows are open, so a trigger's areas show beside its window.
+        // Picking an area shows the brush, the size a click on open ground adds.
+        boolean brush_course = brush.isCourse() && !campaign_active;
+        boolean show_brush = !map_mode && getGUIRoot().getModalDelegate() == null
+                && (has_cursor || (brush_course && !course.isEmpty()))
+                && (campaign == null || !campaign.isPicking() || campaign.isPickingArea());
+        if (!show_brush && campaign == null)
             return;
         try (BrushRenderer.Batch batch = brush_renderer.begin(renderer, model_view, projection)) {
+            if (campaign != null)
+                campaign.render(batch);
+            if (!show_brush)
+                return;
             float r = stroke_sign < 0 ? 1f : .4f;
             float g = stroke_sign < 0 ? .4f : 1f;
             float b = stroke_sign == 0 ? 1f : .4f;
-            if (brush.isCourse())
+            if (brush_course)
                 drawCourse(batch, r, g, b);
             if (!has_cursor)
                 return;
             Clipboard copy = clipboard;
-            if (brush == Brush.COPY) {
+            if (brush == Brush.COPY && !campaign_active) {
                 if (copy != null) {
                     // Where the copy will land.
                     float m = HeightMap.METERS_PER_UNIT_GRID;
@@ -1107,7 +1230,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             }
             batch.circle(cursor_x, cursor_y, radius, r, g, b, .9f);
             batch.dot(cursor_x, cursor_y, r, g, b, .9f);
-            if (brush.isDragShape() && stroke_sign != 0) {
+            if (brush.isDragShape() && stroke_sign != 0 && !campaign_active) {
                 batch.circle(ramp_x, ramp_y, radius, r, g, b, .9f);
                 batch.line(ramp_x, ramp_y, cursor_x, cursor_y, r, g, b, .9f);
             }
@@ -1154,6 +1277,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         map_mode = true;
         has_cursor = false;
         toolbar.remove();
+        if (campaign_bar != null)
+            campaign_bar.remove();
         setFocus();
         game_camera.disable();
         setCamera(new MapCamera(this, game_camera));
@@ -1169,15 +1294,37 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         setCamera(game_camera);
         game_camera.enable();
         addChild(toolbar);
+        if (campaign_bar != null)
+            addChild(campaign_bar);
     }
 
-    private void openMenu() {
+    @Override
+    public void focusEditor() {
+        setFocus();
+    }
+
+    @Override
+    public void openMenu() {
         cancelStroke();
+        // The trigger windows a pick put away come back first; the menu goes on top of them.
+        if (campaign != null)
+            campaign.cancelPick();
         // Keep the keyboard on the editor once the menu closes, not on a toolbar button.
         setFocus();
-        if (getGUIRoot().getModalDelegate() == null)
+        if (getGUIRoot().getModalDelegate() != null)
+            return;
+        if (campaign == null) {
             getGUIRoot().addModalForm(new EditorMenu(this::save, this::exit,
                     session == null && EditorSession.canHost() ? this::share : null));
+            return;
+        }
+        getGUIRoot().addModalForm(new EditorMenu(CampaignEditor.i18n("editor_headline"), List.of(
+                new EditorMenu.Entry(MapEditor.i18n("resume"), () -> {
+                }),
+                new EditorMenu.Entry(CampaignEditor.i18n("save_campaign"), () -> saveCampaign(null)),
+                new EditorMenu.Entry(CampaignEditor.i18n("test_level"), this::chooseTestDifficulty),
+                new EditorMenu.Entry(CampaignEditor.i18n("campaign_levels"), this::backToCampaign),
+                new EditorMenu.Entry(MapEditor.i18n("exit_editor"), this::exit))));
     }
 
     private void save() {
@@ -1207,6 +1354,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }));
     }
 
+    /** The resources as they are now, by kind. */
     private MapFile.@NonNull Resources currentResources() {
         @SuppressWarnings("unchecked")
         List<int[]>[] positions = new List[Resource.values().length];
@@ -1215,12 +1363,132 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         return new MapFile.Resources(positions);
     }
 
+    // ---- Campaign levels ----
+
+    /** Puts the island as it is now into the campaign's level, in memory, so it is saved with the campaign. */
+    private void storeLevel(@NonNull CampaignTools tools) {
+        CampaignSession level_session = tools.getSession();
+        CampaignFile.Level level = level_session.getLevel();
+        boolean keep_heights = edited || editor.isModified();
+        MapFile.Resources current = currentResources();
+        float[][] heights = editor.copyHeights();
+        level.heights = keep_heights ? heights : null;
+        level.resources = resources_edited ? current : null;
+        level.preview = MapPreview.render(heights, settings, current);
+        if (editor.isModified() || resources_modified || tools.getLayer().isModified())
+            level_session.markModified();
+        edited = keep_heights;
+        editor.markSaved();
+        resources_modified = false;
+        tools.getLayer().markSaved();
+    }
+
+    /**
+     * Saves the campaign, asking for a name the first time.
+     *
+     * @param after run once it is saved, or null
+     */
+    private void saveCampaign(@Nullable Runnable after) {
+        CampaignTools tools = Objects.requireNonNull(campaign);
+        Path dir = CampaignEditor.getCampaignsDir();
+        if (dir == null) {
+            getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("no_maps_dir")));
+            return;
+        }
+        storeLevel(tools);
+        CampaignSession level_session = tools.getSession();
+        String saved_name = level_session.getSavedName();
+        if (saved_name != null) {
+            writeCampaign(dir, saved_name, after);
+            return;
+        }
+        getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), CampaignEditor.i18n("save_campaign_caption"),
+                CampaignEditor.i18n("campaign_name"), name -> CampaignFile.pathFor(dir, name),
+                name -> CampaignEditor.i18n("overwrite_campaign", name), level_session.file.name,
+                name -> writeCampaign(dir, name, after)));
+    }
+
+    private void writeCampaign(@NonNull Path dir, @NonNull String name, @Nullable Runnable after) {
+        CampaignSession level_session = Objects.requireNonNull(campaign).getSession();
+        try {
+            level_session.save(dir, name);
+        } catch (IOException e) {
+            getGUIRoot().addModalForm(new MessageForm(CampaignEditor.i18n("campaign_save_failed",
+                    String.valueOf(e.getMessage()))));
+            return;
+        }
+        getGUIRoot().getInfoPrinter().print(CampaignEditor.i18n("campaign_saved", name));
+        if (after != null)
+            after.run();
+    }
+
+    /** Points out what would spoil the level before testing it, and tests it if asked to anyway. */
+    private void chooseTestDifficulty() {
+        List<String> problems = Objects.requireNonNull(campaign).getScenario().problems();
+        if (problems.isEmpty()) {
+            showTestDifficulties();
+            return;
+        }
+        getGUIRoot().addModalForm(new QuestionForm(CampaignEditor.i18n("problems_test", String.join("\n",
+                problems)), (_, _, _, _) -> showTestDifficulties()));
+    }
+
+    private void showTestDifficulties() {
+        getGUIRoot().addModalForm(new EditorMenu(CampaignEditor.i18n("test_caption"), List.of(
+                new EditorMenu.Entry(CampaignEditor.i18n("difficulty_easy"),
+                        () -> saveCampaign(() -> test(CampaignState.DIFFICULTY_EASY))),
+                new EditorMenu.Entry(CampaignEditor.i18n("difficulty_normal"),
+                        () -> saveCampaign(() -> test(CampaignState.DIFFICULTY_NORMAL))),
+                new EditorMenu.Entry(CampaignEditor.i18n("difficulty_hard"),
+                        () -> saveCampaign(() -> test(CampaignState.DIFFICULTY_HARD))),
+                new EditorMenu.Entry(CampaignEditor.i18n("back"), () -> {
+                }))));
+    }
+
+    /**
+     * Plays the level as saved, from the main menu as a campaign would, and comes back to it in the editor once the
+     * game is over.
+     */
+    private void test(int difficulty) {
+        CampaignSession level_session = Objects.requireNonNull(campaign).getSession();
+        Path dir = Objects.requireNonNull(CampaignEditor.getCampaignsDir());
+        int level = level_session.level;
+        Path path = CampaignFile.pathFor(dir, level_session.file.name);
+        closeEditor();
+        Renderer.startMenu(network, getGUIRoot().getGUI(), menu -> {
+            // Started once the menu has faded in, so the game's loading does not overlap the menu's.
+            TimerAnimation start = new TimerAnimation(LocalEventQueue.getQueue().getManager(), timer -> {
+                timer.stop();
+                CustomCampaign.test(network, menu.getGUIRoot(), path, level_session.file, level, difficulty,
+                        (back_network, gui) -> CampaignEditorForm.editLevel(back_network, gui, level_session, level));
+            }, TEST_START_DELAY);
+            start.start();
+        });
+    }
+
+    /** Back to the campaign's list of levels, keeping this level's changes in memory. */
+    private void backToCampaign() {
+        CampaignTools tools = Objects.requireNonNull(campaign);
+        storeLevel(tools);
+        CampaignSession level_session = tools.getSession();
+        closeEditor();
+        Renderer.startMenu(network, getGUIRoot().getGUI(), menu -> menu.setMenuCentered(new CampaignEditorForm(
+                network, menu.getGUIRoot(), menu, level_session)));
+    }
+
+    private boolean isModified() {
+        if (editor.isModified() || resources_modified)
+            return true;
+        return campaign != null && (campaign.getLayer().isModified() || campaign.getSession().isModified());
+    }
+
     private void exit() {
         if (session != null) {
             getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("session_exit_confirm"), (_, _, _,
                     _) -> leave()));
-        } else if (editor.isModified() || resources_modified) {
-            getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("exit_confirm"), (_, _, _, _) -> leave()));
+        } else if (isModified()) {
+            getGUIRoot().addModalForm(new QuestionForm(campaign != null ? CampaignEditor.i18n("exit_confirm")
+                    : MapEditor.i18n("exit_confirm"), (_, _, _, _) -> leave()));
         } else {
             leave();
         }
@@ -1233,11 +1501,18 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             current.leave();
             SelectGameMenu.openEditorSessionsNext();
         }
+        closeEditor();
+        Renderer.startMenu(network, getGUIRoot().getGUI());
+    }
+
+    /** Lets go of what the editor made for drawing, as the screen is left. */
+    private void closeEditor() {
         if (ground != null)
             ground.close();
         tint.close();
         edges.close();
-        Renderer.startMenu(network, getGUIRoot().getGUI());
+        if (campaign != null)
+            campaign.getLayer().close();
     }
 
     // ---- Shared sessions ----

@@ -11,6 +11,7 @@ import com.oddlabs.tt.landscape.LandscapeResources;
 import com.oddlabs.tt.landscape.NotificationListener;
 import com.oddlabs.tt.landscape.World;
 import com.oddlabs.tt.landscape.WorldParameters;
+import com.oddlabs.tt.model.RacesResources;
 import com.oddlabs.tt.model.RubberSupply;
 import com.oddlabs.tt.model.SupplyManager;
 import com.oddlabs.tt.player.Player;
@@ -34,7 +35,8 @@ import java.util.Arrays;
 
 /**
  * Builds the editor's island behind the progress screen, the same way the main menu builds its backdrop island:
- * a world with a single idle player and no races loaded, since the editor only shapes terrain.
+ * a world with a single idle player. Races are loaded only for a campaign level, to show its tribes' models; the
+ * map editor only shapes terrain.
  */
 final class MapEditorLoader implements LoadCallback {
     private final @NonNull NetworkSelector network;
@@ -43,6 +45,8 @@ final class MapEditorLoader implements LoadCallback {
     private final float @Nullable [] @Nullable [] heights;
     private final MapFile.@Nullable Resources resources;
     private final @NonNull SessionStart session;
+    // The campaign level being edited, or null when editing a map.
+    private final @Nullable CampaignSession campaign_session;
 
     /** Whether the editor opens a shared session once built, joins the one the island came from, or neither. */
     sealed interface SessionStart {
@@ -67,12 +71,25 @@ final class MapEditorLoader implements LoadCallback {
     MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings, @Nullable String map_name,
             float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources,
             @NonNull SessionStart session) {
+        this(network, settings, map_name, heights, resources, session, null);
+    }
+
+    /** Opens a campaign's level, its island with its tribes' units and buildings. */
+    MapEditorLoader(@NonNull NetworkSelector network, @NonNull CampaignSession campaign_session) {
+        this(network, campaign_session.getLevel().settings, null, campaign_session.getLevel().heights,
+                campaign_session.getLevel().resources, new SessionStart.None(), campaign_session);
+    }
+
+    private MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings,
+            @Nullable String map_name, float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources,
+            @NonNull SessionStart session, @Nullable CampaignSession campaign_session) {
         this.network = network;
         this.settings = settings;
         this.map_name = map_name;
         this.heights = heights;
         this.resources = resources;
         this.session = session;
+        this.campaign_session = campaign_session;
     }
 
     /**
@@ -138,7 +155,9 @@ final class MapEditorLoader implements LoadCallback {
 
         RenderQueues render_queues = new RenderQueues();
         LandscapeResources landscape_resources = World.loadCommon(render_queues);
-        World world = World.newWorld(AudioManager.getManager(), landscape_resources, null, new NotificationListener() {
+        // A campaign level shows the tribes' models, which the races bring.
+        RacesResources races = campaign_session != null ? World.loadInGame(render_queues) : null;
+        World world = World.newWorld(AudioManager.getManager(), landscape_resources, races, new NotificationListener() {
         }, world_params, world_info, generator.getTerrainType(), players, generator.getFogInfo());
         // The game lets chickens loose by the trees now and then. In the editor they would only stand on cells
         // that resources are painted on, so they stay away.
@@ -164,18 +183,28 @@ final class MapEditorLoader implements LoadCallback {
         AccessMap access_map = new AccessMap(terrain, settings);
         TintOverlay tint = new TintOverlay(terrain, access_map, settings);
         SessionSync.Link link = new SessionSync.Link();
+        ResourceLayer layer = new ResourceLayer(world, access_map, settings, (changed, x0, y0, x1, y1) -> {
+            if (ground != null)
+                ground.resourcesChanged(changed, x0, y0, x1, y1);
+            tint.mapChanged();
+            link.resourcesChanged(x0, y0, x1, y1);
+        });
+        CampaignTools campaign = null;
+        if (campaign_session != null && races != null) {
+            ScenarioLayer scenario = new ScenarioLayer(world, races, access_map, layer,
+                    campaign_session.getLevel().scenario);
+            campaign = new CampaignTools(campaign_session, scenario);
+            layer.setTaken(scenario::isTaken);
+        }
+        ScenarioLayer objects = campaign != null ? campaign.getLayer() : null;
         TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, settings, (x0, y0, x1, y1) -> {
             snapper.snap(x0, y0, x1, y1);
             if (ground != null)
                 ground.heightsChanged(x0, y0, x1, y1);
             access_map.heightsChanged();
             link.heightsChanged(x0, y0, x1, y1);
-        });
-        ResourceLayer layer = new ResourceLayer(world, access_map, settings, (changed, x0, y0, x1, y1) -> {
-            if (ground != null)
-                ground.resourcesChanged(changed, x0, y0, x1, y1);
-            tint.mapChanged();
-            link.resourcesChanged(x0, y0, x1, y1);
+            if (objects != null)
+                objects.heightsChanged(x0, y0, x1, y1);
         });
         tint.setResources(layer::get);
         if (resources != null)
@@ -183,7 +212,7 @@ final class MapEditorLoader implements LoadCallback {
         MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
                 new CameraState(generator.getFogInfo()), editor, ground, access_map, tint, layer,
                 new PlantLayer(world, access_map), renderer.getWater(), settings, map_name, edited, resources != null,
-                link);
+                link, campaign);
         Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
         gui_root.pushDelegate(delegate);
         switch (session) {

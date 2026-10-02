@@ -1,5 +1,6 @@
 package com.oddlabs.tt.gui;
 
+import com.oddlabs.tt.delegate.Delegate;
 import com.oddlabs.tt.render.GUIRenderer;
 import org.joml.Vector4fc;
 import org.jspecify.annotations.NonNull;
@@ -80,8 +81,27 @@ public final class PulldownButton<T> extends GUIObject {
             // Account for scrollbar width in positioning
             menu_x = (int) getRootX();
         }
-        menu.setPos(menu_x, (int) (getRootY() - menu.getHeight()));
-        gui_root.getDelegate().addChild(menu);
+        // Open downwards, or upwards when there is no room below, as for a button along the bottom of the screen;
+        // and keep the whole menu on the screen.
+        int menu_y = (int) (getRootY() - menu.getHeight());
+        if (menu_y < 0 && getRootY() + getHeight() + menu.getHeight() <= gui_root.getHeight())
+            menu_y = (int) (getRootY() + getHeight());
+        menu_y = Math.max(0, Math.min(menu_y, gui_root.getHeight() - menu.getHeight()));
+        menu_x = Math.max(0, Math.min(menu_x, gui_root.getWidth() - menu.getWidth()));
+        menu.setPos(menu_x, menu_y);
+        layer().addChild(menu);
+    }
+
+    /**
+     * The screen layer the button is on: the window layer when it sits in a modal window, so the menu shows above
+     * the window and takes the clicks, else the screen's own delegate.
+     */
+    private @NonNull GUIObject layer() {
+        for (GUIObject parent = getParent(); parent != null; parent = parent.getParent()) {
+            if (parent instanceof Delegate delegate)
+                return delegate;
+        }
+        return gui_root.getDelegate();
     }
 
     private void deactivateMenu() {

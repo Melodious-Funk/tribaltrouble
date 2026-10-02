@@ -6,6 +6,7 @@ import com.oddlabs.tt.font.TextLineRenderer;
 import com.oddlabs.tt.input.GameAction;
 import com.oddlabs.tt.input.InputEvent;
 import com.oddlabs.tt.input.InputPhase;
+import com.oddlabs.tt.input.Key;
 import com.oddlabs.tt.render.GUIRenderer;
 import com.oddlabs.util.Color;
 import org.jspecify.annotations.NonNull;
@@ -42,7 +43,8 @@ public final class EditBox extends TextBox {
         if (event.getPhase() == InputPhase.PRESSED || event.getPhase() == InputPhase.REPEAT) {
             boolean consumed = true;
 
-            if (event.consumeAction(GameAction.UI_ACTIVATE)) {
+            // Enter starts a new line; Space is also bound to activate, but types a space.
+            if (event.getKeyCode() == Key.RETURN && event.consumeAction(GameAction.UI_ACTIVATE)) {
                 if (insert(index, '\n')) index++;
             } else if (event.consumeAction(GameAction.UI_NAV_LEFT)) {
                 if (index > 0) index--;

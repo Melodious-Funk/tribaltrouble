@@ -60,6 +60,12 @@ final class ResourceLayer {
         }
     }
 
+    /** Says which cells something else stands on, such as a campaign level's units and buildings. */
+    @FunctionalInterface
+    interface CellFilter {
+        boolean isTaken(int x, int y);
+    }
+
     /** Told about each rectangle of cells (inclusive) where resources came or went. */
     @FunctionalInterface
     interface ChangeListener {
@@ -79,6 +85,7 @@ final class ResourceLayer {
     private int @NonNull [] disk = new int[0];
     private int disk_radius = -1;
 
+    private @Nullable CellFilter taken;
     private boolean trees_changed;
     private @Nullable Region opened_region;
 
@@ -138,6 +145,16 @@ final class ResourceLayer {
                     put(iron.getGridX(), iron.getGridY(), Resource.IRON, iron);
             }
         });
+    }
+
+    /** Keeps painted resources off the cells the filter says are taken. */
+    void setTaken(@Nullable CellFilter taken) {
+        this.taken = taken;
+    }
+
+    /** Whether a tree, rock or iron stands on a cell. */
+    boolean hasResource(int x, int y) {
+        return kinds[y * size + x] != null;
     }
 
     private void put(int x, int y, @Nullable Resource kind, @Nullable Object object) {
@@ -353,6 +370,8 @@ final class ResourceLayer {
     /** Playable ground with room to spare, as the generator places resources. */
     private boolean canPlace(int x, int y) {
         if (!inside(x, y) || kinds[y * size + x] != null || isOccupied(x, y))
+            return false;
+        if (taken != null && taken.isTaken(x, y))
             return false;
         // Landscape.placeSupplies places them only on the playable region.
         if (access.get(x, y) != AccessMap.Kind.REGION)

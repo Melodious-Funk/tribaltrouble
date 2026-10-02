@@ -36,10 +36,12 @@ import java.util.zip.GZIPOutputStream;
 record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
                @Nullable Resources resources, @Nullable MapPreview preview) {
     static final String EXTENSION = ".ttmap";
+    /** The newest map version, which {@link #writeBody} writes. */
+    static final int BODY_VERSION = MapFileHeader.VERSION;
 
     // The server reads the start of the file too, in MapFileHeader; keep the two in step.
     private static final int MAGIC = MapFileHeader.MAGIC;
-    private static final int VERSION = MapFileHeader.VERSION;
+    private static final int VERSION = BODY_VERSION;
 
     /** Grid positions of every resource, one list per kind in {@link Resource} order. */
     record Resources(@NonNull List<int @NonNull []> @NonNull [] positions) {
@@ -109,30 +111,35 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(stream)))) {
             out.writeInt(MAGIC);
             out.writeInt(VERSION);
-            writeSettings(out, settings);
-            out.writeBoolean(heights != null);
-            out.writeBoolean(resources != null);
-            out.writeBoolean(preview != null);
-            if (preview != null) {
-                out.writeShort(preview.size());
-                out.write(preview.rgb());
-            }
-            if (heights != null) {
-                out.writeInt(heights.length);
-                for (float[] row : heights) {
-                    for (float height : row) {
-                        out.writeFloat(height);
-                    }
+            writeBody(out);
+        }
+    }
+
+    /** Writes everything after the magic and version, as a campaign file also keeps its levels. */
+    void writeBody(@NonNull DataOutputStream out) throws IOException {
+        writeSettings(out, settings);
+        out.writeBoolean(heights != null);
+        out.writeBoolean(resources != null);
+        out.writeBoolean(preview != null);
+        if (preview != null) {
+            out.writeShort(preview.size());
+            out.write(preview.rgb());
+        }
+        if (heights != null) {
+            out.writeInt(heights.length);
+            for (float[] row : heights) {
+                for (float height : row) {
+                    out.writeFloat(height);
                 }
             }
-            if (resources != null) {
-                for (Resource kind : Resource.values()) {
-                    List<int[]> positions = resources.of(kind);
-                    out.writeInt(positions.size());
-                    for (int[] position : positions) {
-                        out.writeShort(position[0]);
-                        out.writeShort(position[1]);
-                    }
+        }
+        if (resources != null) {
+            for (Resource kind : Resource.values()) {
+                List<int[]> positions = resources.of(kind);
+                out.writeInt(positions.size());
+                for (int[] position : positions) {
+                    out.writeShort(position[0]);
+                    out.writeShort(position[1]);
                 }
             }
         }
@@ -140,19 +147,20 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
 
     static @NonNull MapFile load(@NonNull Path path) throws IOException {
         try (var in = open(path)) {
-            return read(in, nameOf(path));
+            return readBody(in, readVersion(in), nameOf(path));
         }
     }
 
     /** A map from the bytes of its file, as another player in a shared session hands it over. */
     static @NonNull MapFile fromBytes(byte @NonNull [] file, @NonNull String name) throws IOException {
         try (var in = open(new ByteArrayInputStream(file))) {
-            return read(in, name);
+            return readBody(in, readVersion(in), name);
         }
     }
 
-    private static @NonNull MapFile read(@NonNull DataInputStream in, @NonNull String name) throws IOException {
-        int version = readVersion(in);
+    /** Reads what {@link #writeBody} wrote, for a file of the given map version. */
+    static @NonNull MapFile readBody(@NonNull DataInputStream in, int version, @NonNull String name)
+            throws IOException {
         MapSettings settings = readSettings(in);
         boolean has_heights = in.readBoolean();
         boolean has_resources = version >= 2 && in.readBoolean();

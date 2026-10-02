@@ -8,6 +8,7 @@ import com.oddlabs.tt.gui.CampaignIcons;
 import com.oddlabs.tt.gui.GUI;
 import com.oddlabs.tt.gui.GUIRoot;
 import com.oddlabs.tt.gui.LoadCampaignBox;
+import com.oddlabs.tt.render.Renderer;
 import com.oddlabs.tt.trigger.GameOverDelayTrigger;
 import com.oddlabs.tt.util.Utils;
 import com.oddlabs.tt.viewer.WorldViewer;
@@ -52,6 +53,8 @@ public abstract class Campaign {
     public final void victory(final @NonNull WorldViewer viewer) {
         GUIRoot gui_root = viewer.getGUIRoot();
         new GameOverDelayTrigger(viewer, gui_root.getDelegate().getCamera(), i18n("island_complete"));
+        if (!savesProgress())
+            return;
         LoadCampaignBox.loadSavegames(
                 new DeterministicSerializerLoopbackInterface<CampaignState[]>() {
                     @Override
@@ -97,6 +100,20 @@ public abstract class Campaign {
     private void doFailed(@NonNull Throwable e, @NonNull WorldViewer viewer) {
         String failed_message = i18n("failed_message", Globals.getSavegamesFileName(), e.getMessage());
         viewer.getGUIRoot().addModalForm(new MessageForm(failed_message));
+    }
+
+    /** Whether winning an island is written to the savegames, which a test run from an editor leaves out. */
+    protected boolean savesProgress() {
+        return true;
+    }
+
+    /** Where to go once an island's game is over: the campaign map, or the main menu before the first win. */
+    public void gameClosed(@NonNull NetworkSelector network, @NonNull GUI gui) {
+        if (state.getIslandState(0) != CampaignState.ISLAND_COMPLETED) {
+            Renderer.startMenu(network, gui);
+        } else {
+            pushDelegate(network, gui);
+        }
     }
 
     public abstract CampaignIcons getIcons();

@@ -13,6 +13,7 @@ import com.oddlabs.tt.gui.LoadCampaignBox;
 import com.oddlabs.tt.gui.MouseButton;
 import com.oddlabs.tt.gui.Origin;
 import com.oddlabs.tt.gui.Skin;
+import com.oddlabs.tt.mapeditor.CustomCampaign;
 import com.oddlabs.tt.guievent.RowListener;
 import com.oddlabs.tt.player.campaign.Campaign;
 import com.oddlabs.tt.player.campaign.CampaignState;
@@ -47,10 +48,12 @@ public final class CampaignForm extends Form implements DeterministicSerializerL
 
     private final @NonNull GUIRoot gui_root;
     private final @NonNull NetworkSelector network;
+    private final @NonNull Menu main_menu;
 
     public CampaignForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull Menu main_menu) {
         this.gui_root = gui_root;
         this.network = network;
+        this.main_menu = main_menu;
         Label headline = new Label(i18n("campaign"), Skin.getSkin().getHeadlineFont());
         addChild(headline);
 
@@ -120,6 +123,13 @@ public final class CampaignForm extends Form implements DeterministicSerializerL
     }
 
     public void load(@NonNull CampaignState campaign_state) {
+        if (campaign_state.getRace() == CampaignState.RACE_CUSTOM) {
+            // A campaign from the campaign editor opens on its list of levels.
+            CustomCampaign custom = CustomCampaign.open(gui_root, campaign_state);
+            if (custom != null)
+                custom.showLevels(network, main_menu);
+            return;
+        }
         Campaign campaign = campaign_state.getRace() == CampaignState.RACE_VIKINGS ? new VikingCampaign(network,
                 gui_root, campaign_state) : new NativeCampaign(network, gui_root, campaign_state);
         setDisabled(true);
