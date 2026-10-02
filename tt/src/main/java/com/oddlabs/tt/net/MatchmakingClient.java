@@ -70,6 +70,7 @@ public final class MatchmakingClient implements MatchmakingClientInterface, Conn
     private @Nullable ProfileListener create_profile_listener;
     private @Nullable ChatRoomInfo chat_room_info;
     private @Nullable MapTransferListener map_transfer_listener;
+    private @Nullable EditorSessionListener editor_session_listener;
 
     private Login login;
     private LoginDetails login_details;
@@ -459,6 +460,66 @@ public final class MatchmakingClient implements MatchmakingClientInterface, Conn
             map_transfer_listener.receiveMapPreview(hash, size, chunk_index, total_chunks, gzipped_rgb);
     }
 
+    public void setEditorSessionListener(@Nullable EditorSessionListener listener) {
+        editor_session_listener = listener;
+    }
+
+    @Override
+    public void editorSessionJoined(int session_id, String name, int slot) {
+        if (editor_session_listener != null && name != null)
+            editor_session_listener.editorSessionJoined(session_id, name, slot);
+    }
+
+    @Override
+    public void editorSessionFailed(int error_code) {
+        if (editor_session_listener != null)
+            editor_session_listener.editorSessionFailed(error_code);
+    }
+
+    @Override
+    public void editorMemberJoined(int slot, String nick) {
+        if (editor_session_listener != null && nick != null)
+            editor_session_listener.editorMemberJoined(slot, nick);
+    }
+
+    @Override
+    public void editorMemberLeft(int slot) {
+        if (editor_session_listener != null)
+            editor_session_listener.editorMemberLeft(slot);
+    }
+
+    @Override
+    public void editorSnapshotRequested(String nick) {
+        if (editor_session_listener != null && nick != null)
+            editor_session_listener.editorSnapshotRequested(nick);
+    }
+
+    @Override
+    public void receiveEditorSnapshot(int total_size, int offset, byte[] data) {
+        if (editor_session_listener != null && data != null)
+            editor_session_listener.receiveEditorSnapshot(total_size, offset, data);
+    }
+
+    @Override
+    public void receiveEditorEdit(int slot, byte[] data, boolean last) {
+        if (editor_session_listener != null && data != null)
+            editor_session_listener.receiveEditorEdit(slot, data, last);
+    }
+
+    @Override
+    public void editorEditAcknowledged() {
+        if (editor_session_listener != null)
+            editor_session_listener.editorEditAcknowledged();
+    }
+
+    @Override
+    public void receiveEditorPresence(int slot, float x, float y, float z, float horiz_angle, float vert_angle,
+            float cursor_x, float cursor_y, float radius, int brush) {
+        if (editor_session_listener != null)
+            editor_session_listener.receiveEditorPresence(slot, x, y, z, horiz_angle, vert_angle, cursor_x, cursor_y,
+                    radius, brush);
+    }
+
     public @Nullable MatchmakingServerLoginInterface getLoginInterface() {
         assert !isConnected();
         return matchmaking_login_interface;
@@ -637,6 +698,10 @@ public final class MatchmakingClient implements MatchmakingClientInterface, Conn
         matchmaking_interface = null;
         if (map_transfer_listener != null)
             map_transfer_listener.connectionClosed();
+        EditorSessionListener session_listener = editor_session_listener;
+        editor_session_listener = null;
+        if (session_listener != null)
+            session_listener.connectionClosed();
         active_profile = null;
         chat_room_info = null;
         SteamManager.clearRichPresence();

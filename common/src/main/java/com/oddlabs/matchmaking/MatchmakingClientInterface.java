@@ -89,4 +89,36 @@ public interface MatchmakingClientInterface {
      * map without a preview is answered with one empty chunk and a size of 0.
      */
     void receiveMapPreview(String hash, int size, int chunk_index, int total_chunks, byte[] gzipped_rgb);
+
+    /** This player is in a shared map editor session, with a colour slot of their own. */
+    void editorSessionJoined(int session_id, String name, int slot);
+
+    /**
+     * Hosting or joining a session failed, or the session ended, with one of the {@code EditorSessionInfo.ERROR_}
+     * codes.
+     */
+    void editorSessionFailed(int error_code);
+
+    /** Someone is in the session: told for each player already there on joining, and for each who joins later. */
+    void editorMemberJoined(int slot, String nick);
+
+    void editorMemberLeft(int slot);
+
+    /**
+     * Asks for the island as it is now, for a player joining; answer with
+     * {@link MatchmakingServerInterface#sendEditorSnapshot}.
+     */
+    void editorSnapshotRequested(String nick);
+
+    /** A piece of the island, while joining. A piece at offset 0 starts the island over, as when its sender left. */
+    void receiveEditorSnapshot(int total_size, int offset, byte[] data);
+
+    /** A piece of another player's edit, from the slot of the player who made it. */
+    void receiveEditorEdit(int slot, byte[] data, boolean last);
+
+    /** The server put this player's oldest unacknowledged edit in the session's order. */
+    void editorEditAcknowledged();
+
+    void receiveEditorPresence(int slot, float x, float y, float z, float horiz_angle, float vert_angle,
+            float cursor_x, float cursor_y, float radius, int brush);
 }

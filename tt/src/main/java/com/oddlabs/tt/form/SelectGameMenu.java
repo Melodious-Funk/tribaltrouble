@@ -49,7 +49,9 @@ import com.oddlabs.tt.guievent.FocusListener;
 import com.oddlabs.tt.guievent.ItemChosenListener;
 import com.oddlabs.tt.guievent.MouseClickListener;
 import com.oddlabs.tt.guievent.RowListener;
+import com.oddlabs.tt.mapeditor.EditorSessionPanel;
 import com.oddlabs.tt.mapeditor.MapBrowserPanel;
+import com.oddlabs.tt.mapeditor.MapEditorForm;
 import com.oddlabs.tt.net.ChatCommand;
 import com.oddlabs.tt.net.GameNetwork;
 import com.oddlabs.tt.net.MatchmakingListener;
@@ -70,10 +72,13 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
     private static final int PANEL_INDEX_CHAT = 1;
     private static final int PANEL_INDEX_HIGHSCORE = 2;
     private static final int PANEL_INDEX_MAPS = 3;
+    private static final int PANEL_INDEX_EDIT = 4;
+    // The tab to open on next, as when coming back from a shared map editor session.
+    private static int next_panel_index = PANEL_INDEX_GAME;
 
     private final @NonNull Menu main_menu;
     private final @NonNull ProfilesForm profiles_form;
-    private final Panel[] panels = new Panel[4];
+    private final Panel[] panels = new Panel[5];
 
     // List of games
     private final @NonNull Panel game_list_panel;
@@ -90,6 +95,7 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
     private final @NonNull MultiColumnComboBox<RankingEntry> ranking_list_box;
     private final @NonNull OpenSkillLeaderboard openskill_leaderboard;
     private final @NonNull MapBrowserPanel map_browser;
+    private final @NonNull EditorSessionPanel editor_sessions;
 
     private final int game_name_size;
     private final int user_name_size;
@@ -109,7 +115,18 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
     private final Panel openskill_list_panel;
 
     public SelectGameMenu(NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull Menu main_menu) {
-        this(network, gui_root, main_menu, 0);
+        this(network, gui_root, main_menu, takeNextPanelIndex());
+    }
+
+    private static int takeNextPanelIndex() {
+        int index = next_panel_index;
+        next_panel_index = PANEL_INDEX_GAME;
+        return index;
+    }
+
+    /** Opens the menu on the map editing tab next time, as after leaving a shared map editor session. */
+    public static void openEditorSessionsNext() {
+        next_panel_index = PANEL_INDEX_EDIT;
     }
 
     public SelectGameMenu(NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull Menu main_menu,
@@ -256,6 +273,12 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         map_browser = new MapBrowserPanel(gui_root, 350);
         panels[PANEL_INDEX_MAPS] = map_browser;
 
+        // Shared map editor sessions panel
+        editor_sessions = new EditorSessionPanel(gui_root, network, 350, () -> main_menu.setMenuCentered(
+                MapEditorForm.forHosting(network, gui_root, () -> new SelectGameMenu(network, gui_root, main_menu,
+                        PANEL_INDEX_EDIT))));
+        panels[PANEL_INDEX_EDIT] = editor_sessions;
+
         // Common
         ChatRoomInfo info = Network.getMatchmakingClient().getChatRoomInfo();
         if (info != null) {
@@ -281,6 +304,8 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         updateList(MatchmakingServerInterface.TYPE_RANKING_LIST);
         updateList(MatchmakingServerInterface.TYPE_OPENSKILL_RANKING_LIST);
         updateList(MatchmakingServerInterface.TYPE_OPENSKILL_PERSONAL_RANKING);
+        if (panel_index == PANEL_INDEX_EDIT)
+            updateList(MatchmakingServerInterface.TYPE_EDITOR_SESSION_LIST);
 
         profiles_form = new ProfilesForm(gui_root, main_menu, this);
         if (Network.getMatchmakingClient().getProfile() == null) {
@@ -433,6 +458,9 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
             case MatchmakingServerInterface.TYPE_MAP_LIST:
                 map_browser.add(names);
                 break;
+            case MatchmakingServerInterface.TYPE_EDITOR_SESSION_LIST:
+                editor_sessions.add(names);
+                break;
             default:
                 throw new IllegalArgumentException("Unexpected list type " + type);
         }
@@ -460,6 +488,9 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
                 break;
             case MatchmakingServerInterface.TYPE_MAP_LIST:
                 map_browser.clear();
+                break;
+            case MatchmakingServerInterface.TYPE_EDITOR_SESSION_LIST:
+                editor_sessions.clear();
                 break;
             default:
                 throw new IllegalArgumentException("Unexpected list type " + type);

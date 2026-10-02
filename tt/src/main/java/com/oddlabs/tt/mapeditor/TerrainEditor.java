@@ -126,6 +126,11 @@ final class TerrainEditor {
         modified = false;
     }
 
+    /** The heights themselves, a row at a time, for a shared session to keep in step; see {@link #applyShared}. */
+    float @NonNull [] @NonNull [] heights() {
+        return heights;
+    }
+
     float @NonNull [] @NonNull [] copyHeights() {
         float[][] copy = new float[size][];
         for (int y = 0; y < size; y++)
@@ -191,6 +196,50 @@ final class TerrainEditor {
         modified = true;
         flush();
         return true;
+    }
+
+    // ---- Shared sessions ----
+
+    /**
+     * Lays heights another player's edit brought, a row at a time, leaving a cell alone where its value is NaN. They
+     * go into what undo restores as well, so taking back an edit of this player's leaves theirs standing. They are
+     * not this player's edit, so neither mark the map modified nor join the stroke in progress.
+     */
+    void applyShared(int x0, int y0, int width, int height, float @NonNull [] values) {
+        for (int j = 0; j < height; j++) {
+            for (int i = 0; i < width; i++) {
+                float v = values[j * width + i];
+                if (!Float.isNaN(v))
+                    heights[y0 + j][x0 + i] = v;
+            }
+        }
+        float[][] backup = stroke_backup;
+        if (backup != null)
+            copyShared(backup, 0, 0, x0, y0, width, height, values);
+        for (UndoStep step : undo_steps)
+            copyShared(step.heights(), step.x0(), step.y0(), x0, y0, width, height, values);
+        markShown(x0, y0, x0 + width - 1, y0 + height - 1);
+    }
+
+    /** Copies shared heights into a saved rectangle of heights whose first cell is (sx0, sy0). */
+    private static void copyShared(float @NonNull [] @NonNull [] saved, int sx0, int sy0, int x0, int y0, int width,
+            int height, float @NonNull [] values) {
+        int ix0 = Math.max(x0, sx0);
+        int iy0 = Math.max(y0, sy0);
+        int ix1 = Math.min(x0 + width, sx0 + saved[0].length) - 1;
+        int iy1 = Math.min(y0 + height, sy0 + saved.length) - 1;
+        for (int y = iy0; y <= iy1; y++) {
+            for (int x = ix0; x <= ix1; x++) {
+                float v = values[(y - y0) * width + x - x0];
+                if (!Float.isNaN(v))
+                    saved[y - sy0][x - sx0] = v;
+            }
+        }
+    }
+
+    /** Heights in a rectangle (inclusive) changed outside a brush, as by rounding; the renderer should follow. */
+    void heightsWritten(int x0, int y0, int x1, int y1) {
+        markShown(x0, y0, x1, y1);
     }
 
     // ---- Brushes ----
@@ -692,16 +741,21 @@ final class TerrainEditor {
 
     private void markDirty(int x0, int y0, int x1, int y1) {
         modified = true;
-        dirty_x0 = Math.min(dirty_x0, x0);
-        dirty_y0 = Math.min(dirty_y0, y0);
-        dirty_x1 = Math.max(dirty_x1, x1);
-        dirty_y1 = Math.max(dirty_y1, y1);
+        markShown(x0, y0, x1, y1);
         if (stroke_backup != null) {
             stroke_x0 = Math.min(stroke_x0, x0);
             stroke_y0 = Math.min(stroke_y0, y0);
             stroke_x1 = Math.max(stroke_x1, x1);
             stroke_y1 = Math.max(stroke_y1, y1);
         }
+    }
+
+    /** Marks heights to upload on the next flush. */
+    private void markShown(int x0, int y0, int x1, int y1) {
+        dirty_x0 = Math.min(dirty_x0, x0);
+        dirty_y0 = Math.min(dirty_y0, y0);
+        dirty_x1 = Math.max(dirty_x1, x1);
+        dirty_y1 = Math.max(dirty_y1, y1);
     }
 
     /** Uploads everything changed since the last flush. Must run on the render thread. */

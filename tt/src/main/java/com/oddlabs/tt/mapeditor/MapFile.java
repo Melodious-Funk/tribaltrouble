@@ -7,10 +7,12 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -138,48 +140,59 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
 
     static @NonNull MapFile load(@NonNull Path path) throws IOException {
         try (var in = open(path)) {
-            int version = readVersion(in);
-            MapSettings settings = readSettings(in);
-            boolean has_heights = in.readBoolean();
-            boolean has_resources = version >= 2 && in.readBoolean();
-            boolean has_preview = version >= 3 && in.readBoolean();
-            MapPreview preview = has_preview ? readPreview(in) : null;
-            float[][] heights = null;
-            if (has_heights) {
-                int grid_size = in.readInt();
-                if (grid_size != gridSize(settings))
-                    throw new IOException("Height map does not fit the island size");
-                heights = new float[grid_size][grid_size];
-                for (float[] row : heights) {
-                    for (int x = 0; x < row.length; x++) {
-                        row[x] = in.readFloat();
-                    }
-                }
-            }
-            Resources resources = null;
-            if (has_resources) {
-                int grid_size = gridSize(settings);
-                @SuppressWarnings("unchecked")
-                List<int[]>[] positions = new List[Resource.values().length];
-                for (int k = 0; k < positions.length; k++) {
-                    int count = in.readInt();
-                    if (count < 0 || count > grid_size * grid_size)
-                        throw new IOException("Bad resource count " + count);
-                    positions[k] = new ArrayList<>(count);
-                    for (int i = 0; i < count; i++) {
-                        int x = in.readShort();
-                        int y = in.readShort();
-                        if (x < 0 || y < 0 || x >= grid_size || y >= grid_size)
-                            throw new IOException("Resource outside the island");
-                        positions[k].add(new int[]{x, y});
-                    }
-                }
-                resources = new Resources(positions);
-            }
-            if (preview == null && heights != null)
-                preview = MapPreview.render(heights, settings, resources);
-            return new MapFile(nameOf(path), settings, heights, resources, preview);
+            return read(in, nameOf(path));
         }
+    }
+
+    /** A map from the bytes of its file, as another player in a shared session hands it over. */
+    static @NonNull MapFile fromBytes(byte @NonNull [] file, @NonNull String name) throws IOException {
+        try (var in = open(new ByteArrayInputStream(file))) {
+            return read(in, name);
+        }
+    }
+
+    private static @NonNull MapFile read(@NonNull DataInputStream in, @NonNull String name) throws IOException {
+        int version = readVersion(in);
+        MapSettings settings = readSettings(in);
+        boolean has_heights = in.readBoolean();
+        boolean has_resources = version >= 2 && in.readBoolean();
+        boolean has_preview = version >= 3 && in.readBoolean();
+        MapPreview preview = has_preview ? readPreview(in) : null;
+        float[][] heights = null;
+        if (has_heights) {
+            int grid_size = in.readInt();
+            if (grid_size != gridSize(settings))
+                throw new IOException("Height map does not fit the island size");
+            heights = new float[grid_size][grid_size];
+            for (float[] row : heights) {
+                for (int x = 0; x < row.length; x++) {
+                    row[x] = in.readFloat();
+                }
+            }
+        }
+        Resources resources = null;
+        if (has_resources) {
+            int grid_size = gridSize(settings);
+            @SuppressWarnings("unchecked")
+            List<int[]>[] positions = new List[Resource.values().length];
+            for (int k = 0; k < positions.length; k++) {
+                int count = in.readInt();
+                if (count < 0 || count > grid_size * grid_size)
+                    throw new IOException("Bad resource count " + count);
+                positions[k] = new ArrayList<>(count);
+                for (int i = 0; i < count; i++) {
+                    int x = in.readShort();
+                    int y = in.readShort();
+                    if (x < 0 || y < 0 || x >= grid_size || y >= grid_size)
+                        throw new IOException("Resource outside the island");
+                    positions[k].add(new int[]{x, y});
+                }
+            }
+            resources = new Resources(positions);
+        }
+        if (preview == null && heights != null)
+            preview = MapPreview.render(heights, settings, resources);
+        return new MapFile(name, settings, heights, resources, preview);
     }
 
     /**
@@ -248,7 +261,17 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
     }
 
     private static @NonNull DataInputStream open(@NonNull Path path) throws IOException {
-        var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(path))));
+        return open(Files.newInputStream(path));
+    }
+
+    private static @NonNull DataInputStream open(@NonNull InputStream stream) throws IOException {
+        DataInputStream in;
+        try {
+            in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(stream)));
+        } catch (IOException e) {
+            stream.close();
+            throw e;
+        }
         try {
             if (in.readInt() != MAGIC)
                 throw new IOException("Not a map file");

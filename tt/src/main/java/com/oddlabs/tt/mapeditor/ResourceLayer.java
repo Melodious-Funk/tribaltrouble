@@ -475,6 +475,24 @@ final class ResourceLayer {
         changed_y1 = Integer.MIN_VALUE;
     }
 
+    /**
+     * Puts resources on cells as another player's edit left them, whatever stands there and whatever painting
+     * allows: the first count cells, as y * size + x, each with a {@link Resource} ordinal or -1 for none. A cell
+     * something other than a resource stands on is left empty.
+     */
+    void applyShared(int @NonNull [] cells, byte @NonNull [] shared_kinds, int count) {
+        for (int i = 0; i < count; i++) {
+            int x = cells[i] % size;
+            int y = cells[i] / size;
+            if (kinds[cells[i]] != null)
+                remove(x, y);
+            if (shared_kinds[i] >= 0 && !isOccupied(x, y))
+                place(Resource.values()[shared_kinds[i]], x, y);
+            changed(x, y);
+        }
+        finish();
+    }
+
     /** The resource on a cell, if any. */
     @Nullable Resource get(int x, int y) {
         return kinds[y * size + x];

@@ -16,6 +16,7 @@ import org.jspecify.annotations.Nullable;
 import org.jspecify.annotations.NullMarked;
 
 import com.oddlabs.matchmaking.ChatRoomEntry;
+import com.oddlabs.matchmaking.EditorSessionInfo;
 import com.oddlabs.matchmaking.Game;
 import com.oddlabs.matchmaking.GameHost;
 import com.oddlabs.matchmaking.GameSession;
@@ -66,6 +67,7 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
     private TimestampedGameSession spectated_session;
     private @Nullable ChatRoom current_room;
     private @Nullable MapUpload map_upload;
+    private @Nullable EditorSession editor_session;
 
     /** A map file coming in, chunk by chunk. */
     private record MapUpload(@NonNull String name, @NonNull String hash, int file_size,
@@ -473,6 +475,9 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
             case TYPE_MAP_LIST:
                 sendRankingChunk(type, SharedMapStore.getInstance().list().toArray(), chunk_index);
                 break;
+            case TYPE_EDITOR_SESSION_LIST:
+                sendRankingChunk(type, EditorSession.all().stream().map(EditorSession::info).toArray(), chunk_index);
+                break;
             case TYPE_OPENSKILL_PERSONAL_RANKING:
                 var profile = getProfile();
                 OpenSkillLeaderboardRankingEntry rankingEntry = profile != null ? getPersonalOpenSkillRankingEntry(
@@ -564,6 +569,7 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
     }
 
     private void closeProfile() {
+        leaveEditorSession();
         gameLostNotify();
         leaveRoom();
         unregisterGame();
@@ -840,5 +846,62 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
             return;
         if (SharedMapStore.getInstance().delete(hash, profile.getNick()))
             MatchmakingServer.getLogger().info(profile.getNick() + " deleted map " + hash);
+    }
+
+    public void hostEditorSession(String name, int size, int terrain) {
+        leaveEditorSession();
+        Profile profile = getProfile();
+        if (profile == null) {
+            client_interface.editorSessionFailed(EditorSessionInfo.ERROR_NOT_ALLOWED);
+            return;
+        }
+        editor_session = EditorSession.open(this, profile.getNick(), name, size, terrain);
+    }
+
+    public void joinEditorSession(int session_id) {
+        leaveEditorSession();
+        Profile profile = getProfile();
+        EditorSession session = EditorSession.get(session_id);
+        int error = profile == null ? EditorSessionInfo.ERROR_NOT_ALLOWED : session == null ? EditorSessionInfo.ERROR_NO_SUCH_SESSION : session.join(
+                this, profile.getNick());
+        if (error != 0) {
+            client_interface.editorSessionFailed(error);
+            return;
+        }
+        editor_session = session;
+    }
+
+    public void editorSessionReady() {
+        if (editor_session != null)
+            editor_session.ready(this);
+    }
+
+    public void leaveEditorSession() {
+        EditorSession session = editor_session;
+        editor_session = null;
+        if (session != null)
+            session.leave(this);
+    }
+
+    /** The session put this player out, as when nobody was left to hand them the island. */
+    void editorSessionEnded(@NonNull EditorSession session) {
+        if (editor_session == session)
+            editor_session = null;
+    }
+
+    public void sendEditorSnapshot(String nick, int total_size, int offset, byte[] data) {
+        if (editor_session != null && nick != null && data != null)
+            editor_session.snapshot(this, nick, total_size, offset, data);
+    }
+
+    public void sendEditorEdit(byte[] data, boolean last) {
+        if (editor_session != null && data != null)
+            editor_session.edit(this, data, last);
+    }
+
+    public void sendEditorPresence(float x, float y, float z, float horiz_angle, float vert_angle, float cursor_x,
+            float cursor_y, float radius, int brush) {
+        if (editor_session != null)
+            editor_session.presence(this, x, y, z, horiz_angle, vert_angle, cursor_x, cursor_y, radius, brush);
     }
 }

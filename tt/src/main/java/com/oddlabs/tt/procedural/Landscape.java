@@ -1326,14 +1326,18 @@ public final class Landscape {
                 }
             } else {
                 location_quarters = buildmap.findNoWrap((unit_grids_per_world >> 1), x, y, 1f);
+                // A map from the editor may leave no room for quarters anywhere, or no walkable ground at all; the
+                // units then start on the nearest walkable ground, or where they would have looked for it.
+                if (location_quarters[0] < 0)
+                    location_quarters = orElse(access.findNoWrap(unit_grids_per_world >> 1, x, y, 1f), x, y);
                 for (int k = -(RacesResources.QUARTERS_SIZE/* - 1*/); k <= (RacesResources.QUARTERS_SIZE/* - 1*/); k++) {
                     for (int l = -(RacesResources.QUARTERS_SIZE/* - 1*/); l <= (RacesResources.QUARTERS_SIZE/* - 1*/); l++) {
                         access.putPixelWrap(location_quarters[0] + k, location_quarters[1] + l, 0f);
                         buildmap.putPixelWrap(location_quarters[0] + k, location_quarters[1] + l, 0f);
                     }
                 }
-                location_armory = buildmap.find((unit_grids_per_world >> 1), location_quarters[0], location_quarters[1],
-                        1f);
+                location_armory = orElse(buildmap.find((unit_grids_per_world >> 1), location_quarters[0],
+                        location_quarters[1], 1f), location_quarters[0], location_quarters[1]);
                 for (int k = -(RacesResources.ARMORY_SIZE/* - 1*/); k <= (RacesResources.ARMORY_SIZE/* - 1*/); k++) {
                     for (int l = -(RacesResources.ARMORY_SIZE/* - 1*/); l <= (RacesResources.ARMORY_SIZE/* - 1*/); l++) {
                         access.putPixelWrap(location_armory[0] + k, location_armory[1] + l, 0f);
@@ -1341,14 +1345,14 @@ public final class Landscape {
                     }
                 }
                 int[] location_unit_start;
-                location_unit_start = access.find((unit_grids_per_world >> 1), location_quarters[0],
-                        location_quarters[1], 1f);
+                location_unit_start = orElse(access.find((unit_grids_per_world >> 1), location_quarters[0],
+                        location_quarters[1], 1f), location_quarters[0], location_quarters[1]);
                 supply_locations[i][0] = location_armory[0];
                 supply_locations[i][1] = location_armory[1];
                 int[] location_unit = new int[2];
                 for (int u = 0; u < initial_unit_count; u++) {
-                    location_unit = access.find((unit_grids_per_world >> 1), location_unit_start[0],
-                            location_unit_start[1], 1f);
+                    location_unit = orElse(access.find((unit_grids_per_world >> 1), location_unit_start[0],
+                            location_unit_start[1], 1f), location_unit_start[0], location_unit_start[1]);
                     access.putPixelWrap(location_unit[0], location_unit[1], 0f);
                     player_locations[i][2 * u] = (location_unit[0] * scale);
                     player_locations[i][2 * u + 1] = (location_unit[1] * scale);
@@ -1361,6 +1365,11 @@ public final class Landscape {
         Collections.shuffle(player_locations_list, random);
     }
 
+
+    /** A cell a search found, or the given one when it found none. */
+    private static int @NonNull [] orElse(int @NonNull [] found, int x, int y) {
+        return found[0] >= 0 ? found : new int[]{x, y};
+    }
 
     // ***************
     // * GET METHODS *

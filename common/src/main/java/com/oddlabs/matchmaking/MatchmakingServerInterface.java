@@ -11,6 +11,7 @@ public interface MatchmakingServerInterface {
     int TYPE_OPENSKILL_RANKING_LIST = 4;
     int TYPE_OPENSKILL_PERSONAL_RANKING = 5;
     int TYPE_MAP_LIST = 6;
+    int TYPE_EDITOR_SESSION_LIST = 7;
 
     int MATCHMAKING_SERVER_PORT = 33214;
 
@@ -99,4 +100,44 @@ public interface MatchmakingServerInterface {
 
     /** Takes a shared map off the server; only the profile that uploaded it may. */
     void deleteMap(String hash);
+
+    /**
+     * Opens a shared map editor session on the island being edited, answered with
+     * {@link MatchmakingClientInterface#editorSessionJoined} or {@link MatchmakingClientInterface#editorSessionFailed}.
+     * Leaves any session the player is in.
+     *
+     * @param size the island size, as a {@code Game.SIZE_} index
+     */
+    void hostEditorSession(String name, int size, int terrain);
+
+    /**
+     * Joins a shared map editor session. The server asks a player in it for the island, which arrives with
+     * {@link MatchmakingClientInterface#receiveEditorSnapshot}; edits made from then on come too, to be laid over it.
+     */
+    void joinEditorSession(int session_id);
+
+    /** The island arrived and is shown, so this player can hand it on to the next to join. */
+    void editorSessionReady();
+
+    void leaveEditorSession();
+
+    /**
+     * A piece of the island for a player joining, as {@link MatchmakingClientInterface#editorSnapshotRequested} asks:
+     * at most {@link EditorSessionInfo#CHUNK_SIZE} bytes at an offset into a map file of the given size, in order.
+     */
+    void sendEditorSnapshot(String nick, int total_size, int offset, byte[] data);
+
+    /**
+     * A piece of an edit, at most {@link EditorSessionInfo#CHUNK_SIZE} bytes. The server puts the edits of the session
+     * in one order, passes each on to the others once its last piece is in and acknowledges it to the sender.
+     */
+    void sendEditorEdit(byte[] data, boolean last);
+
+    /**
+     * Where this player's camera is and what their brush is doing, passed on to the others in the session.
+     *
+     * @param brush the brush, how it is held and whether it is over the ground, packed by the client
+     */
+    void sendEditorPresence(float x, float y, float z, float horiz_angle, float vert_angle, float cursor_x,
+            float cursor_y, float radius, int brush);
 }

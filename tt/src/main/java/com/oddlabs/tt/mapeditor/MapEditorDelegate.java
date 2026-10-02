@@ -14,6 +14,7 @@ import com.oddlabs.tt.delegate.CameraDelegate;
 import com.oddlabs.tt.event.LocalEventQueue;
 import com.oddlabs.tt.form.MessageForm;
 import com.oddlabs.tt.form.QuestionForm;
+import com.oddlabs.tt.form.SelectGameMenu;
 import com.oddlabs.tt.gui.CheckBox;
 import com.oddlabs.tt.gui.CursorType;
 import com.oddlabs.tt.gui.Form;
@@ -73,6 +74,10 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
  *
  * <p>The map mode key (Space by default) flies up to the game's island overview. Another press of it flies back, and
  * a left click flies down to the clicked spot. Nothing else works while there.
+ *
+ * <p>In a shared session the island is edited by several players at once. Each one's edits go to the others a few
+ * times a second, and each sees the others' cameras, brushes and edits in their colours. Undo takes back this
+ * player's own edits only.
  */
 final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHost, MapCameraOwner {
     private static final float MIN_RADIUS = 4f;
@@ -87,6 +92,14 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final int PULLDOWN_WIDTH = 150;
     private static final int OVERLAY_PULLDOWN_WIDTH = 190;
     private static final int HINT_WIDTH = 760;
+    /** Seconds between edits sent to a shared session, at least, and the bytes a second they may take at most. */
+    private static final float SEND_INTERVAL = .1f;
+    private static final float SEND_RATE = 400_000f;
+    /** Seconds between telling the session where the camera and brush are, and between telling it when idle. */
+    private static final float PRESENCE_INTERVAL = .1f;
+    private static final float PRESENCE_KEEPALIVE = 1f;
+    /** Seconds after another player's edit before the ground settles, as after a stroke of this player's. */
+    private static final float REMOTE_QUIET = .5f;
 
     private final @NonNull NetworkSelector network;
     private final @NonNull World world;
@@ -172,13 +185,29 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // The middle button view turn in progress. Drags and the release keep arriving here, like in a game.
     private @Nullable LookDelegate look;
 
+    // The shared session this island is edited in, if any, and what keeps it in step and shows the others.
+    private final SessionSync.@NonNull Link link;
+    private @Nullable EditorSession session;
+    private @Nullable SessionSync sync;
+    private @Nullable RemoteEditors remotes;
+    private float send_timer;
+    private float send_interval = SEND_INTERVAL;
+    private float presence_timer;
+    private float presence_idle;
+    private EditorSession.@Nullable Presence last_presence;
+    // Seconds left before another player's latest edit counts as finished.
+    private float remote_busy;
+    // Whether the session is under way, past taking in who was there already.
+    private boolean session_live;
+
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
             @NonNull AccessMap access_map, @NonNull TintOverlay tint, @NonNull ResourceLayer layer,
             @NonNull PlantLayer plants, @NonNull Water water, @NonNull MapSettings settings,
-            @Nullable String map_name, boolean edited, boolean resources_edited) {
+            @Nullable String map_name, boolean edited, boolean resources_edited, SessionSync.@NonNull Link link) {
         super(gui_root, null);
+        this.link = link;
         this.network = network;
         this.world = world;
         this.manager = manager;
@@ -409,6 +438,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         super.displayChangedNotify(width, height);
         toolbar.setPos((width - toolbar.getWidth()) / 2, height - toolbar.getHeight());
         placeLegend();
+        if (remotes != null)
+            remotes.setRosterTop(rosterTop());
+    }
+
+    /** The list of who is in a shared session goes at the left, below the toolbar. */
+    private int rosterTop() {
+        return toolbar.getY() - 10;
     }
 
     /** Just below the toolbar, centred. */
@@ -450,6 +486,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (stroke_sign != 0 && has_cursor && !brush.isDragShape())
             paint(t);
         editor.flush();
+        updateSession(t);
         updateGround(t);
         updateAccess(t);
     }
@@ -583,7 +620,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (ground == null)
             return;
         ground_timer += t;
-        if (stroke_sign == 0 && ground_settle) {
+        if (stroke_sign == 0 && remote_busy <= 0f && ground_settle) {
             ground_settle = false;
             ground.settle();
         } else if (ground.hasChanges() && ground_timer >= GROUND_UPDATE_INTERVAL) {
@@ -598,12 +635,14 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
      */
     private void updateAccess(float t) {
         access_timer += t;
-        if (access_map.isStale() && (stroke_sign == 0 || access_timer >= ACCESS_UPDATE_INTERVAL))
+        // Another player's stroke comes in a few times a second, and is followed now and then like this player's.
+        boolean busy = stroke_sign != 0 || remote_busy > 0f;
+        if (access_map.isStale() && (!busy || access_timer >= ACCESS_UPDATE_INTERVAL))
             sortAccess();
         // Capturing the island for the overlay takes a moment on a large one, so a stroke only brings it along now
         // and then.
         overlay_timer += t;
-        boolean now = stroke_sign == 0 || overlay_timer >= OVERLAY_UPDATE_INTERVAL;
+        boolean now = !busy || overlay_timer >= OVERLAY_UPDATE_INTERVAL;
         if (now)
             overlay_timer = 0f;
         tint.update(Renderer.getRenderer().getRenderContext(), now);
@@ -999,10 +1038,17 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             @NonNull CameraState state, @NonNull MatrixStack model_view, @NonNull MatrixStack projection) {
         tint.render(Renderer.getRenderer().getRenderContext(), renderer, state);
         edges.render(Renderer.getRenderer().getRenderContext(), state);
-        if (map_mode || getGUIRoot().getModalDelegate() != null)
-            return;
         // The water reflection is drawn from a camera mirrored below the sea; the brush has no place in it.
         if (state.getCurrentZ() < world.getHeightMap().getSeaLevelMeters())
+            return;
+        RemoteEditors others = remotes;
+        if (others != null) {
+            try (BrushRenderer.Batch batch = brush_renderer.begin(renderer, model_view, projection)) {
+                others.renderGround(batch);
+            }
+            others.renderCameras(Renderer.getRenderer().getRenderContext(), state);
+        }
+        if (map_mode || getGUIRoot().getModalDelegate() != null)
             return;
         if (!has_cursor && course.isEmpty())
             return;
@@ -1084,7 +1130,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         // Keep the keyboard on the editor once the menu closes, not on a toolbar button.
         setFocus();
         if (getGUIRoot().getModalDelegate() == null)
-            getGUIRoot().addModalForm(new EditorMenu(this::save, this::exit));
+            getGUIRoot().addModalForm(new EditorMenu(this::save, this::exit,
+                    session == null && EditorSession.canHost() ? this::share : null));
     }
 
     private void save() {
@@ -1095,11 +1142,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
         getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), dir, map_name != null ? map_name : "", name -> {
             boolean keep_heights = edited || editor.isModified();
-            @SuppressWarnings("unchecked")
-            List<int[]>[] positions = new List[Resource.values().length];
-            for (Resource kind : Resource.values())
-                positions[kind.ordinal()] = layer.positions(kind);
-            MapFile.Resources current = new MapFile.Resources(positions);
+            MapFile.Resources current = currentResources();
             float[][] heights = editor.copyHeights();
             // The preview shows the map as it is, even what is generated again from the settings.
             MapPreview preview = MapPreview.render(heights, settings, current);
@@ -1118,8 +1161,19 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }));
     }
 
+    private MapFile.@NonNull Resources currentResources() {
+        @SuppressWarnings("unchecked")
+        List<int[]>[] positions = new List[Resource.values().length];
+        for (Resource kind : Resource.values())
+            positions[kind.ordinal()] = layer.positions(kind);
+        return new MapFile.Resources(positions);
+    }
+
     private void exit() {
-        if (editor.isModified() || resources_modified) {
+        if (session != null) {
+            getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("session_exit_confirm"), (_, _, _,
+                    _) -> leave()));
+        } else if (editor.isModified() || resources_modified) {
             getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("exit_confirm"), (_, _, _, _) -> leave()));
         } else {
             leave();
@@ -1127,11 +1181,207 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     }
 
     private void leave() {
+        EditorSession current = session;
+        endSession();
+        if (current != null) {
+            current.leave();
+            SelectGameMenu.openEditorSessionsNext();
+        }
         if (ground != null)
             ground.close();
         tint.close();
         edges.close();
         Renderer.startMenu(network, getGUIRoot().getGUI());
+    }
+
+    // ---- Shared sessions ----
+
+    /** Opens a session on this island, for others to join from the multiplayer menu's map editing tab. */
+    void hostSession(@NonNull String name) {
+        SessionSync new_sync = startSync();
+        EditorSession opened = EditorSession.host(name, settings, new SessionEditor(), editor.getSize());
+        if (opened == null) {
+            endSession();
+            getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("shared_not_connected")));
+            return;
+        }
+        session = opened;
+        sync = new_sync;
+        session_live = true;
+        getGUIRoot().getInfoPrinter().print(MapEditor.i18n("session_opened", name));
+    }
+
+    /** Takes part in the session this island was handed over from, laying over it what was edited since. */
+    void joinSession(@NonNull EditorSession joined) {
+        startSync();
+        session = joined;
+        joined.attach(new SessionEditor(), editor.getSize());
+        if (session != null) {
+            session_live = true;
+            getGUIRoot().getInfoPrinter().print(MapEditor.i18n("session_joined", joined.getName()));
+        }
+    }
+
+    /** From the editor menu: opens a session on the island as it is, named after it. */
+    private void share() {
+        hostSession(map_name != null ? map_name : MapEditor.i18n("session_default_name", EditorSession.localNick()));
+    }
+
+    private @NonNull SessionSync startSync() {
+        // Edits only go out once they are in the session's island, which starts as the island is now.
+        editor.flush();
+        SessionSync new_sync = new SessionSync(new SessionSync.Ground() {
+            @Override
+            public float @NonNull [] @NonNull [] heights() {
+                return editor.heights();
+            }
+
+            @Override
+            public void rounded(int x0, int y0, int x1, int y1) {
+                editor.heightsWritten(x0, y0, x1, y1);
+            }
+
+            @Override
+            public void applyShared(int x0, int y0, int width, int height, float @NonNull [] values) {
+                editor.applyShared(x0, y0, width, height, values);
+            }
+        }, new SessionSync.Supplies() {
+            @Override
+            public byte kind(int cell) {
+                Resource kind = layer.get(cell % editor.getSize(), cell / editor.getSize());
+                return kind != null ? (byte) kind.ordinal() : EditOp.NO_RESOURCE;
+            }
+
+            @Override
+            public void applyShared(int @NonNull [] cells, byte @NonNull [] kinds, int count) {
+                layer.applyShared(cells, kinds, count);
+            }
+        }, editor.getSize());
+        sync = new_sync;
+        link.set(new_sync);
+        RemoteEditors others = new RemoteEditors(this, editor.getSize());
+        others.setRosterTop(rosterTop());
+        remotes = others;
+        // Whatever is saved from a shared island keeps what was made of it.
+        edited = true;
+        resources_edited = true;
+        return new_sync;
+    }
+
+    /** Goes on alone: the others and their cameras go, the island stays. */
+    private void endSession() {
+        session = null;
+        session_live = false;
+        sync = null;
+        link.set(null);
+        RemoteEditors others = remotes;
+        remotes = null;
+        if (others != null) {
+            others.clear();
+            others.close();
+        }
+    }
+
+    /** Sends this player's edits and whereabouts now and then, and eases the others' cameras along. */
+    private void updateSession(float t) {
+        remote_busy = Math.max(0f, remote_busy - t);
+        EditorSession current = session;
+        RemoteEditors others = remotes;
+        if (current == null || others == null)
+            return;
+        others.tick(t);
+        send_timer += t;
+        if (send_timer >= send_interval)
+            sendEdits();
+        presence_timer += t;
+        presence_idle += t;
+        if (presence_timer >= PRESENCE_INTERVAL) {
+            presence_timer = 0f;
+            Camera camera = getCamera();
+            CameraState state = camera != null ? camera.getState() : game_camera.getState();
+            EditorSession.Presence presence = new EditorSession.Presence(state.getCurrentX(), state.getCurrentY(),
+                    state.getCurrentZ(), state.getHorizAngle(), state.getCurrentVertAngle(), cursor_x, cursor_y,
+                    radius, EditorSession.Presence.pack(brush, has_cursor, stroke_sign, map_mode));
+            if (!presence.equals(last_presence) || presence_idle >= PRESENCE_KEEPALIVE) {
+                current.sendPresence(presence);
+                last_presence = presence;
+                presence_idle = 0f;
+            }
+        }
+    }
+
+    /** Sends what this player changed since the last time as an edit, if anything, and waits longer after a big one. */
+    private void sendEdits() {
+        send_timer = 0f;
+        EditorSession current = session;
+        SessionSync current_sync = sync;
+        if (current == null || current_sync == null)
+            return;
+        EditOp op = current_sync.take();
+        send_interval = op == null ? SEND_INTERVAL : Math.max(SEND_INTERVAL, current.sendEdit(op) / SEND_RATE);
+    }
+
+    /** What the session tells this editor. */
+    private final class SessionEditor implements EditorSession.Editor {
+        @Override
+        public void memberJoined(int slot, @NonNull String nick) {
+            EditorSession current = session;
+            boolean self = current != null && slot == current.getSlot();
+            if (remotes != null)
+                remotes.memberJoined(slot, nick, self);
+            // Those already there when this player joined are only listed.
+            if (!self && session_live)
+                getGUIRoot().getInfoPrinter().print(MapEditor.i18n("session_member_joined", nick));
+        }
+
+        @Override
+        public void memberLeft(int slot, @NonNull String nick) {
+            if (remotes != null)
+                remotes.memberLeft(slot);
+            getGUIRoot().getInfoPrinter().print(MapEditor.i18n("session_member_left", nick));
+        }
+
+        @Override
+        public void edited(int slot, @NonNull EditOp op) {
+            if (sync == null)
+                return;
+            sync.apply(op);
+            if (remotes != null)
+                remotes.edited(slot, op);
+            remote_busy = REMOTE_QUIET;
+            ground_settle = true;
+            if (op.resource_cells().length > 0)
+                resources_modified = true;
+        }
+
+        @Override
+        public void acknowledged() {
+            if (sync != null)
+                sync.acknowledged();
+        }
+
+        @Override
+        public void presence(int slot, EditorSession.@NonNull Presence presence) {
+            if (remotes != null)
+                remotes.presence(slot, presence);
+        }
+
+        @Override
+        public byte @NonNull [] snapshot() throws IOException {
+            // What this player changed goes out first, so the island handed over holds nothing that is not on its way.
+            // A drag or a course laid since the last frame has not reached the renderer, so look everywhere.
+            if (sync != null)
+                sync.changedAnywhere();
+            sendEdits();
+            return new MapFile(map_name != null ? map_name : "", settings, editor.copyHeights(), currentResources(),
+                    null).toBytes();
+        }
+
+        @Override
+        public void ended(@NonNull String reason) {
+            endSession();
+            getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("session_ended", reason)));
+        }
     }
 
     /** Turns the view with the game's first person camera while the middle button is held. */

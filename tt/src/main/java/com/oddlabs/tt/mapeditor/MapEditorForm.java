@@ -36,7 +36,8 @@ import static com.oddlabs.tt.gui.Placement.TOP_LEFT;
 import static com.oddlabs.tt.gui.Placement.TOP_MID;
 
 /**
- * The map editor's start window: pick the island to start from, by options or map code, or open a saved map.
+ * The map editor's start window: pick the island to start from, by options or map code, or open a saved map. Opened
+ * from the multiplayer menu, it hosts a shared session on the island instead of editing it alone.
  */
 public final class MapEditorForm extends Form {
     private static final int SLIDER_LENGTH = 250;
@@ -54,6 +55,8 @@ public final class MapEditorForm extends Form {
     private final @NonNull Label label_mapcode;
     private final @NonNull Label label_map;
     private final @NonNull HorizButton button_start;
+    // Where to go back to when hosting from the multiplayer menu, and null when editing alone.
+    private final @Nullable Runnable back;
 
     private @NonNull MapSettings settings;
     // The saved map the settings came from, and its edited heights and resources if it has them.
@@ -63,8 +66,23 @@ public final class MapEditorForm extends Form {
     private boolean applying;
 
     public MapEditorForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root) {
+        this(network, gui_root, null);
+    }
+
+    /**
+     * The start window for hosting a shared session, from the multiplayer menu.
+     *
+     * @param back reopens the multiplayer menu if the window is cancelled
+     */
+    public static @NonNull MapEditorForm forHosting(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root,
+            @NonNull Runnable back) {
+        return new MapEditorForm(network, gui_root, back);
+    }
+
+    private MapEditorForm(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @Nullable Runnable back) {
         this.network = network;
         this.gui_root = gui_root;
+        this.back = back;
         long tick = LocalEventQueue.getQueue().getHighPrecisionManager().getTick();
         this.settings = MapSettings.random(new Random(tick * tick));
 
@@ -128,7 +146,7 @@ public final class MapEditorForm extends Form {
         button_save.addMouseClickListener((_, _, _, _) -> save());
         HorizButton button_load = new HorizButton(MapEditor.i18n("load"), BUTTON_WIDTH);
         button_load.addMouseClickListener((_, _, _, _) -> load());
-        button_start = new HorizButton(MapEditor.i18n("start"), BUTTON_WIDTH);
+        button_start = new HorizButton(MapEditor.i18n(back != null ? "session_host_button" : "start"), BUTTON_WIDTH);
         button_start.addMouseClickListener((_, _, _, _) -> start());
         HorizButton button_cancel = new CancelButton(BUTTON_WIDTH);
         button_cancel.addMouseClickListener((_, _, _, _) -> cancel());
@@ -303,9 +321,18 @@ public final class MapEditorForm extends Form {
         }));
     }
 
+    @Override
+    protected void doCancel() {
+        if (back != null)
+            back.run();
+    }
+
     private void start() {
         button_start.setDisabled(true);
+        MapEditorLoader.SessionStart session = back == null ? new MapEditorLoader.SessionStart.None()
+                : new MapEditorLoader.SessionStart.Host(map_name != null ? map_name : MapEditor.i18n(
+                        "session_default_name", EditorSession.localNick()));
         ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, settings, map_name,
-                heights, resources));
+                heights, resources, session));
     }
 }
