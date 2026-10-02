@@ -28,6 +28,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.Random;
+import java.util.function.Predicate;
 
 public abstract class AI implements Animated {
     private static final float SLEEP_SECONDS = 2f;
@@ -356,6 +357,12 @@ public abstract class AI implements Animated {
     }
 
     public static int attackLandscape(@NonNull Player owner, @NonNull Target target, int num_warriors) {
+        return attackLandscape(owner, target, num_warriors, _ -> true);
+    }
+
+    /** Sends up to so many warriors at the target, of those the filter lets through. */
+    public static int attackLandscape(@NonNull Player owner, @NonNull Target target, int num_warriors,
+            @NonNull Predicate<@NonNull Unit> filter) {
         int ordered = 0;
         Selectable<?>[][] lists = owner.classifyUnits();
         for (Selectable<?>[] list : lists) {
@@ -363,7 +370,7 @@ public abstract class AI implements Animated {
             if (s instanceof Unit unit && !(s.getPrimaryController() instanceof WalkController
                     && ((WalkController) s.getPrimaryController()).isAgressive())) {
                 for (Selectable<?> thrower : list) {
-                    if (unit.getAbilities().hasAbilities(Abilities.THROW)) {
+                    if (unit.getAbilities().hasAbilities(Abilities.THROW) && filter.test((Unit) thrower)) {
                         owner.setLandscapeTarget(Selectable.newArray(thrower), target.getGridX(), target.getGridY(),
                                 Action.ATTACK, true);
                         ordered++;

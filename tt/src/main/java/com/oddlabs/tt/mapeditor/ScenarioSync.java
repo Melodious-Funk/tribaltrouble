@@ -47,7 +47,8 @@ final class ScenarioSync {
 
     /** The items an edit changed, as they are after it; null for an item it took away. */
     record Op(@NonNull Map<@NonNull Long, byte @Nullable []> items) {
-        private static final int VERSION = 1;
+        // Version 2 carries triggers as Scenario version 3 keeps them.
+        private static final int VERSION = 2;
         private static final int MAX_ITEMS = 1_000_000;
         // A trigger with many long dialogs is the largest item.
         private static final int MAX_ITEM_SIZE = 1 << 22;

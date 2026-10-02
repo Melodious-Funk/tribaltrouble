@@ -117,7 +117,8 @@ public final class CampaignEditorForm extends Form {
         HorizButton button_new = button(file_buttons, null, "new_campaign", () -> discardThen(
                 () -> main_menu.setMenuCentered(new CampaignEditorForm(network, gui_root, main_menu))));
         HorizButton button_open = button(file_buttons, button_new, "open_campaign", this::open);
-        HorizButton button_save = button(file_buttons, button_open, "save_campaign_button", this::save);
+        HorizButton button_original = button(file_buttons, button_open, "open_original", this::openOriginal);
+        HorizButton button_save = button(file_buttons, button_original, "save_campaign_button", this::save);
         HorizButton button_cancel = new CancelButton(BUTTON_WIDTH);
         button_cancel.addMouseClickListener((_, _, _, _) -> cancel());
         file_buttons.addChild(button_cancel);
@@ -299,6 +300,12 @@ public final class CampaignEditorForm extends Form {
                         path.getFileName().toString(), String.valueOf(e.getMessage()))));
             }
         })));
+    }
+
+    /** Opens a copy of one of the game's own campaigns, which saving makes a custom campaign. */
+    private void openOriginal() {
+        discardThen(() -> gui_root.addModalForm(new OriginalCampaignForm(gui_root, file -> main_menu.setMenuCentered(
+                new CampaignEditorForm(network, gui_root, main_menu, CampaignSession.original(file))))));
     }
 
     /** Asks before letting go of unsaved changes, then goes on. */

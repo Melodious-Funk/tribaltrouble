@@ -20,6 +20,7 @@ final class Step {
     private int amount;
     private int type;
     private int trigger = -1;
+    private int unit_filter;
     private @NonNull String header = "";
     private @NonNull String text = "";
 
@@ -80,6 +81,7 @@ final class Step {
             case COUNT, SECONDS, RADIUS -> amount;
             case UNIT_TYPE, DEPLOY_TYPE, SUPPLY_TYPE, MAGIC, ROLE, FACE, TEAM -> type;
             case TRIGGER -> trigger;
+            case UNIT_FILTER -> unit_filter;
             case HEADER, TEXT -> throw new IllegalArgumentException(param + " is text");
         };
     }
@@ -94,6 +96,7 @@ final class Step {
             case COUNT, SECONDS, RADIUS -> amount = value;
             case UNIT_TYPE, DEPLOY_TYPE, SUPPLY_TYPE, MAGIC, ROLE, FACE, TEAM -> type = value;
             case TRIGGER -> trigger = value;
+            case UNIT_FILTER -> unit_filter = value;
             case HEADER, TEXT -> throw new IllegalArgumentException(param + " is text");
         }
     }
@@ -119,6 +122,7 @@ final class Step {
         step.amount = amount;
         step.type = type;
         step.trigger = trigger;
+        step.unit_filter = unit_filter;
         step.header = header;
         step.text = text;
         return step;
@@ -135,6 +139,7 @@ final class Step {
         out.writeInt(amount);
         out.writeShort(type);
         out.writeInt(trigger);
+        out.writeByte(unit_filter);
         out.writeUTF(header);
         out.writeUTF(text);
     }
@@ -142,7 +147,7 @@ final class Step {
     /**
      * Reads a step as a level of the given {@link Scenario} version keeps it.
      *
-     * @param version the level's version; steps of version 1 have no building
+     * @param version the level's version; steps of version 1 have no building, and those before 3 no unit filter
      */
     static @NonNull Step read(@NonNull DataInputStream in, int version) throws IOException {
         Step step = new Step(in.readShort());
@@ -154,6 +159,7 @@ final class Step {
         step.amount = in.readInt();
         step.type = in.readShort();
         step.trigger = in.readInt();
+        step.unit_filter = version >= 3 ? UnitFilter.of(in.readByte()).ordinal() : 0;
         step.header = in.readUTF();
         step.text = in.readUTF();
         return step;

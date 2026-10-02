@@ -66,8 +66,8 @@ final class PlayersForm extends Form {
             menu_race[i].addItem(new PulldownItem<>(raceName(RacesResources.RACE_NATIVES)));
             menu_race[i].addItem(new PulldownItem<>(raceName(RacesResources.RACE_VIKINGS)));
             menu_team[i] = new PulldownMenu<>();
-            for (int t = 0; t < Scenario.NUM_PLAYERS; t++)
-                menu_team[i].addItem(new PulldownItem<>(CampaignEditor.i18n("team_name", t + 1)));
+            for (String team_name : Param.teamNames())
+                menu_team[i].addItem(new PulldownItem<>(team_name));
             menu_role[i] = new PulldownMenu<>();
             int role_index = 0;
             if (i == 0) {

@@ -3,6 +3,7 @@ package com.oddlabs.tt.mapeditor;
 import com.oddlabs.matchmaking.EditorSessionInfo;
 import com.oddlabs.matchmaking.MatchmakingServerInterface;
 import com.oddlabs.tt.model.RacesResources;
+import com.oddlabs.tt.player.PlayerInfo;
 import com.oddlabs.tt.player.campaign.CampaignState;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -24,8 +25,8 @@ import java.util.List;
 final class Scenario {
     static final int NUM_PLAYERS = MatchmakingServerInterface.MAX_PLAYERS;
 
-    // Version 2 gave trigger steps a building beside their object.
-    static final int VERSION = 2;
+    // Version 2 gave trigger steps a building beside their object, and version 3 a unit filter.
+    static final int VERSION = 3;
     /** In a shared session, the ids a player makes are their slot modulo this. */
     private static final int ID_STRIDE = EditorSessionInfo.MAX_MEMBERS;
     private static final int MAX_ITEMS = 100_000;
@@ -39,7 +40,13 @@ final class Scenario {
         /** A computer player that roams but only attacks when a trigger sends it. */
         PASSIVE("role_passive"),
         /** A computer player that stays put, like guards or captives. */
-        NEUTRAL("role_neutral");
+        NEUTRAL("role_neutral"),
+        /** A computer opponent playing as an easy one, whatever the campaign's difficulty. */
+        OPPONENT_EASY("role_opponent_easy"),
+        /** A computer opponent playing as a normal one, whatever the campaign's difficulty. */
+        OPPONENT_NORMAL("role_opponent_normal"),
+        /** A computer opponent playing as a hard one, whatever the campaign's difficulty. */
+        OPPONENT_HARD("role_opponent_hard");
 
         private final @NonNull String key;
 
@@ -52,11 +59,20 @@ final class Scenario {
         }
     }
 
+    /** The team, after the numbered ones, that is no one's enemy, as the game's campaigns keep captives. */
+    static final int NEUTRAL_TEAM = NUM_PLAYERS;
+
+    /** The team the game knows a scenario's team by. */
+    static int gameTeam(int team) {
+        return team == NEUTRAL_TEAM ? PlayerInfo.TEAM_NEUTRAL : team;
+    }
+
     /** A tribe taking part. */
     static final class PlayerSetup {
         boolean enabled;
         /** {@link RacesResources#RACE_NATIVES} or {@link RacesResources#RACE_VIKINGS}. */
         int race;
+        /** From 0, or {@link #NEUTRAL_TEAM}. */
         int team;
         @NonNull Role role;
 
@@ -256,7 +272,8 @@ final class Scenario {
         }
         boolean enemy = false;
         for (int i = 1; i < NUM_PLAYERS; i++)
-            enemy |= players[i].enabled && players[i].team != players[0].team;
+            enemy |= players[i].enabled && players[i].team != players[0].team && players[i].team != NEUTRAL_TEAM
+                    && players[0].team != NEUTRAL_TEAM;
         if (!enemy)
             problems.add(CampaignEditor.i18n("problem_no_enemy"));
         boolean victory = false;
@@ -326,8 +343,10 @@ final class Scenario {
 
     /** Whether a step may leave its area unset, meaning the whole island. */
     static boolean isAreaOptional(boolean condition, @NonNull Step step) {
-        return condition ? ConditionKind.of(step.kind) == ConditionKind.STATUES_LEFT
-                : ActionKind.of(step.kind) == ActionKind.REMOVE_STATUES;
+        if (condition)
+            return ConditionKind.of(step.kind) == ConditionKind.STATUES_LEFT;
+        ActionKind kind = ActionKind.of(step.kind);
+        return kind == ActionKind.REMOVE_STATUES || kind == ActionKind.REMOVE_UNITS || kind == ActionKind.KILL_UNITS;
     }
 
     /** Whether a placed object is of a kind a step's setting can name. */
@@ -523,7 +542,7 @@ final class Scenario {
             } else if (role == Role.HUMAN) {
                 role = Role.OPPONENT;
             }
-            scenario.players[i] = new PlayerSetup(enabled, race, Math.clamp(team, 0, NUM_PLAYERS - 1), role);
+            scenario.players[i] = new PlayerSetup(enabled, race, Math.clamp(team, 0, NEUTRAL_TEAM), role);
         }
         int count = readCount(in);
         for (int i = 0; i < count; i++) {

@@ -80,6 +80,9 @@ public final class Landscape {
 
     private final @NonNull Random random;
     private final @NonNull BlendInfo @NonNull [] blend_infos;
+    // Whether this is an island for the game, which shows the loading screen as it goes, rather than for the map
+    // editor, which may build it away from the render thread.
+    private final boolean textured;
 
     private record StructureLayers(Layer diffuse, Layer normal) {
     }
@@ -157,6 +160,27 @@ public final class Landscape {
     public Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
             float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
             float random_start_pos, boolean archipelago, @Nullable LandscapeOverride override) {
+        this(num_players, meters_per_world, terrain, detail_alpha_value, hills, vegetation_amount, supplies_amount,
+                seed, initial_unit_count, random_start_pos, archipelago, override, true);
+    }
+
+    /**
+     * The island's heights, resources and starting locations alone, as the map editor reads an island: it needs no
+     * OpenGL and leaves the loading screen alone, so it can be built away from the render thread, and has no blend
+     * infos.
+     */
+    public static @NonNull Landscape withoutTextures(int num_players, int meters_per_world,
+            @NonNull TerrainType terrain, float hills, float vegetation_amount, float supplies_amount, int seed,
+            int initial_unit_count) {
+        return new Landscape(num_players, meters_per_world, terrain, 0f, hills, vegetation_amount, supplies_amount,
+                seed, initial_unit_count, 0f, false, null, false);
+    }
+
+    /** @param textured whether to make the blend infos, whose textures need OpenGL */
+    private Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
+            float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
+            float random_start_pos, boolean archipelago, @Nullable LandscapeOverride override, boolean textured) {
+        this.textured = textured;
         this.terrain = terrain;
         this.fixed_resources = override != null ? override.resources() : null;
         hills = (float) Math.sqrt(hills);
@@ -250,14 +274,14 @@ public final class Landscape {
             case NATIVE -> {
                 var natives = generateStructuresNative(voronoi4, voronoi8, voronoi8_hit, voronoi16, voronoi16_hit,
                         voronoi32, voronoi32_hit, noise8, noise256);
-                ProgressForm.progress();
+                progress();
                 generateTerrainNative();
                 yield natives;
             }
             case VIKING -> {
                 var vikings = generateStructuresViking(voronoi4, voronoi8, voronoi8_hit, voronoi16, voronoi16_hit,
                         voronoi32, voronoi32_hit, noise8, noise256);
-                ProgressForm.progress();
+                progress();
                 generateTerrainViking();
                 yield vikings;
             }
@@ -296,9 +320,9 @@ public final class Landscape {
         }
 
         if (DEBUG) height.toLayer().saveAsPNG("height");
-        ProgressForm.progress();
+        progress();
         Channel grass_alpha = generateAlphas();
-        ProgressForm.progress();
+        progress();
         generateUnitLocations(initial_unit_count, random_start_pos);
         generateSupplies(grass_alpha);
 
@@ -311,6 +335,10 @@ public final class Landscape {
 
         if (DEBUG) access.toLayer().saveAsPNG("access_connected");
 
+        if (!textured) {
+            blend_infos = new BlendInfo[0];
+            return;
+        }
         // create blend infos
         blend_infos = new BlendInfo[]{new StructureBlend(structures[0], structure_normals[0], new GLByteImage(
                 new Channel(1, 1).fill(1f), GL11.GL_RED)), new StructureBlend(structures[1], structure_normals[1],
@@ -324,6 +352,17 @@ public final class Landscape {
         };
     }
 
+    /** Moves the loading screen on, for an island built for the game. */
+    private void progress() {
+        if (textured)
+            ProgressForm.progress();
+    }
+
+    private void progress(float step) {
+        if (textured)
+            ProgressForm.progress(step);
+    }
+
     // **************
     // * STRUCTURES *
     // **************
@@ -331,7 +370,7 @@ public final class Landscape {
             @NonNull Channel voronoi8, Channel voronoi8_hit, @NonNull Channel voronoi16, Channel voronoi16_hit,
             @NonNull Channel voronoi32, Channel voronoi32_hit, @NonNull Channel noise8, @NonNull Channel noise256) {
         var structures = new StructureLayers[7];
-        ProgressForm.progress(1 / 8f);
+        progress(1 / 8f);
 
         structures[0] = Landscape.genSand(structure_size, noise8.copy(), noise256.copy());
 
@@ -365,7 +404,7 @@ public final class Landscape {
             @NonNull Channel voronoi8, Channel voronoi8_hit, @NonNull Channel voronoi16, Channel voronoi16_hit,
             @NonNull Channel voronoi32, Channel voronoi32_hit, @NonNull Channel noise8, @NonNull Channel noise256) {
         var structures = new StructureLayers[7];
-        ProgressForm.progress(1 / 8f);
+        progress(1 / 8f);
 
         structures[0] = Landscape.genGravel(structure_size, noise8.copy(), noise256.copy());
 
@@ -904,7 +943,7 @@ public final class Landscape {
         }
         highlight.dynamicRange(0f, 0.25f);
         shadow.invert().dynamicRange(0f, 0.75f);
-        ProgressForm.progress(1 / 14f);
+        progress(1 / 14f);
 
         // generate shadowcasting
         Channel shadowcast = new Channel(unit_grids_per_world, unit_grids_per_world);
@@ -939,7 +978,7 @@ public final class Landscape {
             }
         }
         if (DEBUG) shadow.toLayer().saveAsPNG("alpha_shadow");
-        ProgressForm.progress(1 / 14f);
+        progress(1 / 14f);
 
         alpha_maps[6] = new GLByteImage(seabottom_alpha, GL11.GL_RED);
 
@@ -1028,7 +1067,7 @@ public final class Landscape {
                 seed).toChannel();
         Channel tree_channel = grass_alpha.copy();
         Channel palmtree_channel = height.copy();
-        ProgressForm.progress(1 / 14f);
+        progress(1 / 14f);
 
         switch (terrain) {
             case NATIVE -> {
@@ -1058,7 +1097,7 @@ public final class Landscape {
 
         if (DEBUG) tree_channel.toLayer().saveAsPNG("supplies_trees");
         if (DEBUG) palmtree_channel.toLayer().saveAsPNG("supplies_palmtrees");
-        ProgressForm.progress(1 / 14f);
+        progress(1 / 14f);
 
         // generate rock and iron supplies map
         Channel rock_channel = relheight.copy();
@@ -1134,7 +1173,7 @@ public final class Landscape {
         // shadow and highlight are changed by supply placement
         alpha_maps[4] = new GLByteImage(highlight, GL11.GL_RED);
         alpha_maps[5] = new GLByteImage(shadow, GL11.GL_RED);
-        ProgressForm.progress(1 / 14f);
+        progress(1 / 14f);
 
         // generate plant maps
         plants = new float[NUM_PLANT_TYPES][max_plants << 1];

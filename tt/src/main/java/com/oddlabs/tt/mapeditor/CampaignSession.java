@@ -41,6 +41,11 @@ final class CampaignSession {
         return session;
     }
 
+    /** One of the game's own campaigns, never saved: saving it makes a custom campaign of a copy of it. */
+    static @NonNull CampaignSession original(@NonNull CampaignFile file) {
+        return new CampaignSession(file, null);
+    }
+
     /** A campaign handed over in a shared session, not saved here yet, opened on the level being edited. */
     static @NonNull CampaignSession shared(CampaignFile.@NonNull Shared shared) {
         CampaignSession session = new CampaignSession(shared.file(), null);

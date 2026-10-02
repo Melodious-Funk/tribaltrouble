@@ -271,7 +271,7 @@ final class ScenarioItems {
         } else if (role == Scenario.Role.HUMAN) {
             role = Scenario.Role.OPPONENT;
         }
-        return new Scenario.PlayerSetup(enabled, race, Math.clamp(team, 0, Scenario.NUM_PLAYERS - 1), role);
+        return new Scenario.PlayerSetup(enabled, race, Math.clamp(team, 0, Scenario.NEUTRAL_TEAM), role);
     }
 
     static Scenario.@NonNull Placement readPlacement(int id, byte @NonNull [] data) throws IOException {

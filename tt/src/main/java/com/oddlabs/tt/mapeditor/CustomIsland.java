@@ -61,7 +61,8 @@ final class CustomIsland extends Island {
                 continue;
             boolean human = i == 0;
             game_network.getClient().getServerInterface().setPlayerSlot(i, human ? PlayerSlot.HUMAN : PlayerSlot.AI,
-                    player.race, player.team, true, human ? PlayerSlot.AI_NONE : aiSlot(player.role, difficulty));
+                    player.race, Scenario.gameTeam(player.team), true,
+                    human ? PlayerSlot.AI_NONE : aiSlot(player.role, difficulty));
             // The scenario places every unit and building itself.
             game_network.getClient().setUnitInfo(i, new UnitInfo());
         }
@@ -76,6 +77,9 @@ final class CustomIsland extends Island {
                 case CampaignState.DIFFICULTY_HARD -> PlayerSlot.AI_HARD;
                 default -> PlayerSlot.AI_NORMAL;
             };
+            case OPPONENT_EASY -> PlayerSlot.AI_EASY;
+            case OPPONENT_NORMAL -> PlayerSlot.AI_NORMAL;
+            case OPPONENT_HARD -> PlayerSlot.AI_HARD;
             case PASSIVE -> PlayerSlot.AI_PASSIVE_CAMPAIGN;
             case NEUTRAL, HUMAN -> PlayerSlot.AI_NEUTRAL_CAMPAIGN;
         };

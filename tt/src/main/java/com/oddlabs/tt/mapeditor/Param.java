@@ -28,7 +28,9 @@ enum Param {
     TEXT("param_text"),
     /** A placed building, beside an {@link #OBJECT} when an action names both a unit and where it goes. */
     BUILDING("param_building"),
-    TEAM("param_team");
+    TEAM("param_team"),
+    /** Which kind of the player's units a step counts or orders, as a {@link UnitFilter} ordinal. */
+    UNIT_FILTER("param_unit_filter");
 
     /** The kinds of unit that can be spawned, in {@link #UNIT_TYPE} order. */
     static final ObjectKind[] UNIT_TYPES = {ObjectKind.PEON, ObjectKind.ROCK_WARRIOR, ObjectKind.IRON_WARRIOR,
@@ -37,7 +39,8 @@ enum Param {
     static final DeployType[] DEPLOY_TYPES = {DeployType.ROCK_WARRIOR, DeployType.IRON_WARRIOR,
             DeployType.RUBBER_WARRIOR, DeployType.PEON};
     /** The AI roles a player can be switched to, in {@link #ROLE} order. */
-    static final Scenario.Role[] ROLES = {Scenario.Role.OPPONENT, Scenario.Role.PASSIVE, Scenario.Role.NEUTRAL};
+    static final Scenario.Role[] ROLES = {Scenario.Role.OPPONENT, Scenario.Role.PASSIVE, Scenario.Role.NEUTRAL,
+            Scenario.Role.OPPONENT_EASY, Scenario.Role.OPPONENT_NORMAL, Scenario.Role.OPPONENT_HARD};
     /** Portraits per tribe; {@link #FACE} 0 is none, then the Vikings' and then the Natives'. */
     static final int FACES_PER_TRIBE = 9;
 
@@ -88,6 +91,15 @@ enum Param {
         };
     }
 
+    /** The teams a tribe can be on, in {@link Scenario.PlayerSetup#team} order: the numbered ones, then neutral. */
+    static @NonNull String @NonNull [] teamNames() {
+        String[] names = new String[Scenario.NEUTRAL_TEAM + 1];
+        for (int i = 0; i < Scenario.NUM_PLAYERS; i++)
+            names[i] = CampaignEditor.i18n("team_name", i + 1);
+        names[Scenario.NEUTRAL_TEAM] = CampaignEditor.i18n("team_neutral");
+        return names;
+    }
+
     /** The names to choose between, for a setting picked from a dropdown of fixed choices, or null. */
     @NonNull String @Nullable [] getChoices() {
         return switch (this) {
@@ -103,12 +115,14 @@ enum Param {
             case SUPPLY_TYPE -> new String[]{CampaignEditor.i18n("supply_tree"), CampaignEditor.i18n("supply_rock"),
                     CampaignEditor.i18n("supply_iron"), CampaignEditor.i18n("supply_rubber")};
             case MAGIC -> new String[]{CampaignEditor.i18n("magic_0"), CampaignEditor.i18n("magic_1")};
-            case TEAM -> {
-                String[] names = new String[Scenario.NUM_PLAYERS];
+            case UNIT_FILTER -> {
+                UnitFilter[] filters = UnitFilter.values();
+                String[] names = new String[filters.length];
                 for (int i = 0; i < names.length; i++)
-                    names[i] = CampaignEditor.i18n("team_name", i + 1);
+                    names[i] = filters[i].getName();
                 yield names;
             }
+            case TEAM -> teamNames();
             case ROLE -> {
                 String[] names = new String[ROLES.length];
                 for (int i = 0; i < names.length; i++)

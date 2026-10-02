@@ -17,6 +17,7 @@ import static com.oddlabs.tt.mapeditor.Param.TEAM;
 import static com.oddlabs.tt.mapeditor.Param.TARGET_PLAYER;
 import static com.oddlabs.tt.mapeditor.Param.TEXT;
 import static com.oddlabs.tt.mapeditor.Param.TRIGGER;
+import static com.oddlabs.tt.mapeditor.Param.UNIT_FILTER;
 import static com.oddlabs.tt.mapeditor.Param.UNIT_TYPE;
 
 /**
@@ -36,18 +37,18 @@ enum ActionKind {
     CAMERA_JUMP("action_camera", AREA),
     /** Puts new units in an area. */
     SPAWN_UNITS("action_spawn", PLAYER, UNIT_TYPE, COUNT, AREA),
-    /** Sends a player's warriors to attack an area. */
-    ATTACK_AREA("action_attack_area", PLAYER, COUNT, AREA),
-    /** Sends a player's warriors at another player's armory, chieftain or other units. */
-    ATTACK_PLAYER("action_attack_player", PLAYER, TARGET_PLAYER, COUNT),
+    /** Sends a player's warriors, of a kind, to attack an area. */
+    ATTACK_AREA("action_attack_area", PLAYER, UNIT_FILTER, COUNT, AREA),
+    /** Sends a player's warriors, of a kind, at another player's armory, chieftain or other units. */
+    ATTACK_PLAYER("action_attack_player", PLAYER, UNIT_FILTER, TARGET_PLAYER, COUNT),
     /** Sends units out of a player's armory. */
     DEPLOY("action_deploy", PLAYER, DEPLOY_TYPE, COUNT),
     /** Fills a player's armory up with units and iron weapons. */
     REFILL_ARMORY("action_refill_armory", PLAYER),
     /** From now on, a player's armory replaces the units the player loses. */
     REINFORCEMENTS("action_reinforcements", PLAYER, DEPLOY_TYPE),
-    /** Hands a player's units in an area to another player, as freed captives join the player. */
-    CHANGE_OWNER_AREA("action_change_owner_area", PLAYER, AREA, NEW_OWNER),
+    /** Hands a player's units of a kind in an area to another player, as freed captives join the player. */
+    CHANGE_OWNER_AREA("action_change_owner_area", PLAYER, UNIT_FILTER, AREA, NEW_OWNER),
     /** Hands a placed unit to another player. */
     CHANGE_OWNER_OBJECT("action_change_owner_object", OBJECT, NEW_OWNER),
     /** Takes a placed unit or building away. */
@@ -66,8 +67,8 @@ enum ActionKind {
     SET_TEAM("action_set_team", PLAYER, TEAM),
     /** Sends a placed unit into a tower or onto a ship. */
     ENTER_BUILDING("action_enter_building", OBJECT, BUILDING),
-    /** Sends a player's units in an area into a tower or onto a ship. */
-    BOARD_FROM_AREA("action_board_from_area", PLAYER, AREA, BUILDING, COUNT),
+    /** Sends a player's units of a kind in an area into a tower or onto a ship. */
+    BOARD_FROM_AREA("action_board_from_area", PLAYER, UNIT_FILTER, AREA, BUILDING, COUNT),
     /** Brings the units in a tower or on a ship out. */
     LEAVE_BUILDING("action_leave_building", BUILDING),
     /** Sends units out of a building, of a kind it can send, making those it lacks. */
@@ -75,7 +76,11 @@ enum ActionKind {
     /** Puts golden statues in an area. */
     SPAWN_STATUES("action_spawn_statues", AREA, COUNT),
     /** Takes the golden statues in an area away, as raiders carry them off. */
-    REMOVE_STATUES("action_remove_statues", AREA);
+    REMOVE_STATUES("action_remove_statues", AREA),
+    /** Takes a player's units of a kind in an area away, or all over the island when it names none. */
+    REMOVE_UNITS("action_remove_units", PLAYER, UNIT_FILTER, AREA),
+    /** Kills a player's units of a kind in an area, or all over the island when it names none. */
+    KILL_UNITS("action_kill_units", PLAYER, UNIT_FILTER, AREA);
 
     private final @NonNull String key;
     private final @NonNull Param @NonNull [] params;

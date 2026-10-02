@@ -346,13 +346,13 @@ final class ScenarioRunner {
                     Scenario.Area area = scenario.findArea(step.get(Param.AREA));
                     Player player = players[step.get(Param.PLAYER)];
                     yield area != null && player != null
-                            && countUnits(player, area) >= Math.max(1, step.get(Param.COUNT));
+                            && countUnits(player, area, filter(step)) >= Math.max(1, step.get(Param.COUNT));
                 }
                 case UNITS_NEAR_OBJECT -> {
                     float[] at = whereIs(step.get(Param.OBJECT));
                     Player player = players[step.get(Param.PLAYER)];
-                    yield at != null && player != null
-                            && hasUnitNear(player, objects.get(step.get(Param.OBJECT)), at, step.get(Param.RADIUS));
+                    yield at != null && player != null && hasUnitNear(player, filter(step),
+                            objects.get(step.get(Param.OBJECT)), at, step.get(Param.RADIUS));
                 }
                 case OBJECT_DESTROYED -> whereIs(step.get(Param.OBJECT)) == null;
                 case PLAYER_ELIMINATED -> {
@@ -362,7 +362,7 @@ final class ScenarioRunner {
                 case ENEMIES_DEFEATED -> enemiesDefeated();
                 case UNITS_BELOW -> {
                     Player player = players[step.get(Param.PLAYER)];
-                    yield player == null || player.getUnitCountContainer().getNumSupplies() < step.get(Param.COUNT);
+                    yield player == null || countUnits(player, filter(step)) < step.get(Param.COUNT);
                 }
                 case SUPPLIES_GATHERED -> {
                     Player player = players[step.get(Param.PLAYER)];
@@ -377,6 +377,17 @@ final class ScenarioRunner {
                     yield object instanceof Building building && !building.isDead()
                             && building.getUnitContainer() != null
                             && building.getUnitContainer().getNumSupplies() >= Math.max(1, step.get(Param.COUNT));
+                }
+                case OBJECT_IN_AREA -> {
+                    float[] at = whereIs(step.get(Param.OBJECT));
+                    Scenario.Area area = scenario.findArea(step.get(Param.AREA));
+                    yield at != null && area != null && area.contains(at[0], at[1]);
+                }
+                case UNITS_FEWER_IN_AREA -> {
+                    Scenario.Area area = scenario.findArea(step.get(Param.AREA));
+                    Player player = players[step.get(Param.PLAYER)];
+                    yield area != null && (player == null
+                            || countUnits(player, area, filter(step)) < Math.max(1, step.get(Param.COUNT)));
                 }
             };
         }
@@ -464,14 +475,14 @@ final class ScenarioRunner {
                 Player player = players[step.get(Param.PLAYER)];
                 if (area != null && player != null)
                     AI.attackLandscape(player, new LandscapeTarget(UnitGrid.toGridCoordinate(area.x),
-                            UnitGrid.toGridCoordinate(area.y)), step.get(Param.COUNT));
+                            UnitGrid.toGridCoordinate(area.y)), step.get(Param.COUNT), filter(step)::matches);
             }
             case ATTACK_PLAYER -> {
                 Player player = players[step.get(Param.PLAYER)];
                 Player target_player = players[step.get(Param.TARGET_PLAYER)];
                 Target target = target_player != null ? attackTarget(target_player) : null;
                 if (player != null && target != null)
-                    AI.attackLandscape(player, target, step.get(Param.COUNT));
+                    AI.attackLandscape(player, target, step.get(Param.COUNT), filter(step)::matches);
             }
             case DEPLOY -> {
                 Player player = players[step.get(Param.PLAYER)];
@@ -494,7 +505,7 @@ final class ScenarioRunner {
                 Player from = players[step.get(Param.PLAYER)];
                 Player to = players[step.get(Param.NEW_OWNER)];
                 if (area != null && from != null && to != null && from != to) {
-                    for (Unit unit : unitsOf(from)) {
+                    for (Unit unit : unitsOf(from, filter(step))) {
                         if (area.contains(unit.getPositionX(), unit.getPositionY()) && !isChieftain(unit))
                             changeOwner(unit, to);
                     }
@@ -540,7 +551,7 @@ final class ScenarioRunner {
             case SET_TEAM -> {
                 Player player = players[step.get(Param.PLAYER)];
                 if (player != null)
-                    player.setTeam(Math.clamp(step.get(Param.TEAM), 0, Scenario.NUM_PLAYERS - 1));
+                    player.setTeam(Scenario.gameTeam(Math.clamp(step.get(Param.TEAM), 0, Scenario.NEUTRAL_TEAM)));
             }
             case ENTER_BUILDING -> {
                 Building building = liveBuilding(step.get(Param.BUILDING));
@@ -553,7 +564,7 @@ final class ScenarioRunner {
                 Building building = liveBuilding(step.get(Param.BUILDING));
                 if (area != null && player != null && building != null) {
                     int left = Math.max(1, step.get(Param.COUNT));
-                    for (Unit unit : unitsOf(player)) {
+                    for (Unit unit : unitsOf(player, filter(step))) {
                         if (left > 0 && area.contains(unit.getPositionX(), unit.getPositionY())
                                 && sendInto(unit, building))
                             left--;
@@ -580,6 +591,22 @@ final class ScenarioRunner {
             case REMOVE_STATUES -> {
                 for (SceneryModel statue : statuesIn(scenario.findArea(step.get(Param.AREA))))
                     removeStatue(statue);
+            }
+            case REMOVE_UNITS, KILL_UNITS -> {
+                Player player = players[step.get(Param.PLAYER)];
+                Scenario.Area area = scenario.findArea(step.get(Param.AREA));
+                if (player != null) {
+                    for (Unit unit : unitsOf(player, filter(step))) {
+                        // Those in towers and ships stay, as taking them out from under their building breaks it.
+                        if (unit.isMounted() || (area != null
+                                && !area.contains(unit.getPositionX(), unit.getPositionY())))
+                            continue;
+                        if (kind == ActionKind.KILL_UNITS)
+                            unit.hit(KILL_DAMAGE, 0f, 1f, player);
+                        else
+                            unit.removeNow();
+                    }
+                }
             }
         }
         return false;
@@ -709,6 +736,9 @@ final class ScenarioRunner {
             old.stop();
         AI ai = switch (role) {
             case OPPONENT -> new AdvancedAI(player, null, aiDifficulty(difficulty));
+            case OPPONENT_EASY -> new AdvancedAI(player, null, AdvancedAI.DIFFICULTY_EASY);
+            case OPPONENT_NORMAL -> new AdvancedAI(player, null, AdvancedAI.DIFFICULTY_NORMAL);
+            case OPPONENT_HARD -> new AdvancedAI(player, null, AdvancedAI.DIFFICULTY_HARD);
             case PASSIVE -> new PassiveAI(player, null, true);
             case NEUTRAL, HUMAN -> new PassiveAI(player, null, false);
         };
@@ -819,17 +849,36 @@ final class ScenarioRunner {
     }
 
     private static @NonNull List<@NonNull Unit> unitsOf(@NonNull Player player) {
+        return unitsOf(player, UnitFilter.ANY);
+    }
+
+    /** The player's live units of a kind. */
+    private static @NonNull List<@NonNull Unit> unitsOf(@NonNull Player player, @NonNull UnitFilter filter) {
         List<Unit> units = new ArrayList<>();
         for (Selectable<?> selectable : player.getUnits().getSet()) {
-            if (selectable instanceof Unit unit && !unit.isDead())
+            if (selectable instanceof Unit unit && !unit.isDead() && filter.matches(unit))
                 units.add(unit);
         }
         return units;
     }
 
-    private static int countUnits(@NonNull Player player, Scenario.@NonNull Area area) {
+    /** The units of a kind a step's {@link Param#UNIT_FILTER} picks. */
+    private static @NonNull UnitFilter filter(@NonNull Step step) {
+        return UnitFilter.of(step.get(Param.UNIT_FILTER));
+    }
+
+    /**
+     * How many units of a kind the player has: of any kind, as the game counts them, with those in its buildings;
+     * else those out on the island.
+     */
+    private static int countUnits(@NonNull Player player, @NonNull UnitFilter filter) {
+        return filter == UnitFilter.ANY ? player.getUnitCountContainer().getNumSupplies()
+                : unitsOf(player, filter).size();
+    }
+
+    private static int countUnits(@NonNull Player player, Scenario.@NonNull Area area, @NonNull UnitFilter filter) {
         int count = 0;
-        for (Unit unit : unitsOf(player)) {
+        for (Unit unit : unitsOf(player, filter)) {
             if (area.contains(unit.getPositionX(), unit.getPositionY()))
                 count++;
         }
@@ -861,13 +910,13 @@ final class ScenarioRunner {
     }
 
     /**
-     * Whether a unit of the player is within a radius of a spot.
+     * Whether a unit of the player, of the kind, is within a radius of a spot.
      *
      * @param self the object at the spot, which does not count itself, or null
      */
-    private static boolean hasUnitNear(@NonNull Player player, @Nullable Selectable<?> self, float @NonNull [] at,
-            float radius) {
-        for (Unit unit : unitsOf(player)) {
+    private static boolean hasUnitNear(@NonNull Player player, @NonNull UnitFilter filter,
+            @Nullable Selectable<?> self, float @NonNull [] at, float radius) {
+        for (Unit unit : unitsOf(player, filter)) {
             if (unit == self)
                 continue;
             float dx = unit.getPositionX() - at[0];
