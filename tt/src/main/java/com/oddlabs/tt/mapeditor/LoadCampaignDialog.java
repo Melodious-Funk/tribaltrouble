@@ -1,139 +1,139 @@
 package com.oddlabs.tt.mapeditor;
 
-import com.oddlabs.tt.font.Font;
-import com.oddlabs.tt.form.MessageForm;
-import com.oddlabs.tt.form.QuestionForm;
-import com.oddlabs.tt.gui.CancelButton;
 import com.oddlabs.tt.gui.ColumnInfo;
-import com.oddlabs.tt.gui.DateLabel;
-import com.oddlabs.tt.gui.FocusDirection;
-import com.oddlabs.tt.gui.Form;
 import com.oddlabs.tt.gui.GUIRoot;
-import com.oddlabs.tt.gui.HorizButton;
-import com.oddlabs.tt.gui.Label;
-import com.oddlabs.tt.gui.LabelBox;
-import com.oddlabs.tt.gui.MultiColumnComboBox;
-import com.oddlabs.tt.gui.Row;
-import com.oddlabs.tt.gui.Skin;
-import com.oddlabs.tt.gui.SortedLabel;
-import com.oddlabs.tt.guievent.RowListener;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Consumer;
 
-import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
-import static com.oddlabs.tt.gui.Placement.BOTTOM_RIGHT;
-import static com.oddlabs.tt.gui.Placement.LEFT_MID;
+/**
+ * Browses folders for saved campaigns, in a {@link FileBrowserDialog}, to open one or delete one. It starts in the
+ * campaigns folder, but campaigns kept anywhere else can be found too.
+ */
+final class LoadCampaignDialog implements FileBrowserDialog.FileType<CampaignFile.Entry> {
+    private static final FileBrowserDialog.Memory memory = new FileBrowserDialog.Memory();
 
-/** The saved campaigns, to open one in the editor or delete one. */
-final class LoadCampaignDialog extends Form {
-    private static final int NAME_WIDTH = 260;
-    private static final int LEVELS_WIDTH = 80;
-    private static final int DATE_WIDTH = 160;
-    private static final int LIST_HEIGHT = 260;
-    private static final int BUTTON_WIDTH = 100;
-
-    private final @NonNull GUIRoot gui_root;
-    private final @NonNull Path dir;
-    private final @NonNull Consumer<@NonNull Path> open;
-    private final @NonNull MultiColumnComboBox<CampaignFile.Entry> list;
-    private final @NonNull LabelBox label_description;
-
-    LoadCampaignDialog(@NonNull GUIRoot gui_root, @NonNull Path dir, @NonNull Consumer<@NonNull Path> open) {
-        super(CampaignEditor.i18n("open_caption"));
-        this.gui_root = gui_root;
-        this.dir = dir;
-        this.open = open;
-        list = new MultiColumnComboBox<>(gui_root, new ColumnInfo[]{
-                new ColumnInfo(MapEditor.i18n("column_name"), NAME_WIDTH),
-                new ColumnInfo(CampaignEditor.i18n("column_levels"), LEVELS_WIDTH),
-                new ColumnInfo(MapEditor.i18n("column_modified"), DATE_WIDTH)}, LIST_HEIGHT);
-        list.addRowListener(new RowListener<>() {
-            @Override
-            public void rowChosen(CampaignFile.@NonNull Entry entry) {
-                label_description.setText(entry.description());
-            }
-
-            @Override
-            public void rowDoubleClicked(CampaignFile.@NonNull Entry entry) {
-                choose(entry);
-            }
-        });
-        label_description = new LabelBox("", Skin.getSkin().getEditFont(), list.getWidth());
-        HorizButton button_open = new HorizButton(CampaignEditor.i18n("open_button"), BUTTON_WIDTH);
-        button_open.addMouseClickListener((_, _, _, _) -> {
-            CampaignFile.Entry selected = list.getSelected();
-            if (selected != null)
-                choose(selected);
-        });
-        HorizButton button_delete = new HorizButton(MapEditor.i18n("delete_button"), BUTTON_WIDTH);
-        button_delete.addMouseClickListener((_, _, _, _) -> {
-            CampaignFile.Entry selected = list.getSelected();
-            if (selected != null)
-                gui_root.addModalForm(new QuestionForm(CampaignEditor.i18n("delete_campaign_confirm",
-                        selected.name()), (_, _, _, _) -> delete(selected)));
-        });
-        HorizButton button_cancel = new CancelButton(BUTTON_WIDTH);
-        button_cancel.addMouseClickListener((_, _, _, _) -> cancel());
-        addChild(list);
-        addChild(label_description);
-        addChild(button_open);
-        addChild(button_delete);
-        addChild(button_cancel);
-        list.place();
-        label_description.place(list, BOTTOM_LEFT);
-        button_cancel.place(label_description, BOTTOM_RIGHT);
-        button_delete.place(button_cancel, LEFT_MID);
-        button_open.place(button_delete, LEFT_MID);
-        compileCanvas();
-        centerPos();
-        refresh();
+    private LoadCampaignDialog() {
     }
 
-    private void refresh() {
-        list.clear();
-        Font font = Skin.getSkin().getMultiColumnComboBoxData().font();
-        int index = 0;
-        for (CampaignFile.Entry entry : CampaignFile.list(dir)) {
-            list.addRow(new Row<>(List.of(
-                    new SortedLabel(entry.name(), index++, font),
-                    new Label(Integer.toString(entry.level_titles().size()), font),
-                    new DateLabel(entry.modified().toMillis(), font)), entry));
-        }
-        if (list.getSize() > 0) {
-            list.selectFirst();
-            CampaignFile.Entry first = list.getSelected();
-            label_description.setText(first != null ? first.description() : "");
-        } else {
-            label_description.setText(CampaignEditor.i18n("no_campaigns"));
-        }
+    /** The dialog the campaign editor opens a campaign with. */
+    static @NonNull FileBrowserDialog<CampaignFile.Entry> create(@NonNull GUIRoot gui_root, @NonNull Path start_dir,
+            @NonNull Consumer<@NonNull Path> open) {
+        return create(gui_root, start_dir, CampaignEditor.i18n("open_caption"), CampaignEditor.i18n("open_button"),
+                open);
     }
 
-    private void choose(CampaignFile.@NonNull Entry entry) {
-        remove();
-        open.accept(entry.path());
-    }
-
-    private void delete(CampaignFile.@NonNull Entry entry) {
-        try {
-            Files.deleteIfExists(entry.path());
-        } catch (IOException e) {
-            gui_root.addModalForm(new MessageForm(CampaignEditor.i18n("delete_campaign_failed",
-                    String.valueOf(e.getMessage()))));
-        }
-        refresh();
+    /**
+     * @param start_dir the folder to show when no other was browsed before
+     * @param caption   the dialog's title
+     * @param action    the label of the button that takes the selected campaign
+     */
+    static @NonNull FileBrowserDialog<CampaignFile.Entry> create(@NonNull GUIRoot gui_root, @NonNull Path start_dir,
+            @NonNull String caption, @NonNull String action, @NonNull Consumer<@NonNull Path> open) {
+        return new FileBrowserDialog<>(gui_root, new LoadCampaignDialog(), start_dir, caption, action,
+                entry -> open.accept(entry.path()));
     }
 
     @Override
-    public void setFocus(@NonNull FocusDirection direction) {
-        if (direction == FocusDirection.BACKWARD) {
-            super.setFocus(direction);
-        } else {
-            list.setFocus(direction);
-        }
+    public @NonNull String extension() {
+        return CampaignFile.EXTENSION;
+    }
+
+    @Override
+    public @NonNull List<CampaignFile.Entry> list(@NonNull Path dir) {
+        return CampaignFile.list(dir);
+    }
+
+    @Override
+    public @NonNull Path path(CampaignFile.@NonNull Entry entry) {
+        return entry.path();
+    }
+
+    @Override
+    public @NonNull String name(CampaignFile.@NonNull Entry entry) {
+        return entry.name();
+    }
+
+    @Override
+    public @NonNull ColumnInfo @NonNull [] columns() {
+        return new ColumnInfo[]{new ColumnInfo(CampaignEditor.i18n("column_levels"), 80),
+                new ColumnInfo(MapEditor.i18n("column_modified"), 150)};
+    }
+
+    @Override
+    public @NonNull List<FileBrowserDialog.@NonNull Value> values(CampaignFile.@NonNull Entry entry) {
+        int levels = entry.level_titles().size();
+        return List.of(new FileBrowserDialog.Value(Integer.toString(levels), levels),
+                FileBrowserDialog.Value.date(entry.modified().toMillis()));
+    }
+
+    /** The island of the first level. */
+    @Override
+    public @Nullable MapPreview preview(CampaignFile.@NonNull Entry entry) throws IOException {
+        if (entry.level_titles().isEmpty())
+            return null;
+        CampaignFile.Level first = CampaignFile.loadLevel(entry.path(), 0);
+        if (first.preview != null)
+            return first.preview;
+        return first.heights != null ? MapPreview.render(first.heights, first.settings, first.resources) : null;
+    }
+
+    @Override
+    public @NonNull String info(CampaignFile.@NonNull Entry entry) {
+        return CampaignEditor.i18n("campaign_info", entry.level_titles().size());
+    }
+
+    /** The description, then the levels by title. */
+    @Override
+    public @Nullable String description(CampaignFile.@NonNull Entry entry) {
+        StringBuilder text = new StringBuilder(entry.description().isEmpty() ? MapEditor.i18n("no_description")
+                : entry.description());
+        List<String> titles = entry.level_titles();
+        if (titles.isEmpty())
+            text.append("\n\n").append(CampaignEditor.i18n("no_levels"));
+        else
+            text.append('\n');
+        for (int i = 0; i < titles.size(); i++)
+            text.append('\n').append(CampaignEditor.i18n("level_title", i + 1, titles.get(i)));
+        return text.toString();
+    }
+
+    @Override
+    public @Nullable Path home() {
+        return CampaignEditor.getCampaignsDir();
+    }
+
+    @Override
+    public @NonNull String homeButton() {
+        return CampaignEditor.i18n("browse_campaigns");
+    }
+
+    @Override
+    public @NonNull String deleteConfirm(CampaignFile.@NonNull Entry entry) {
+        return CampaignEditor.i18n("delete_campaign_confirm", entry.name());
+    }
+
+    @Override
+    public @NonNull String deleteFailed(@NonNull String reason) {
+        return CampaignEditor.i18n("delete_campaign_failed", reason);
+    }
+
+    @Override
+    public @NonNull String notFound() {
+        return CampaignEditor.i18n("browse_no_campaign");
+    }
+
+    @Override
+    public @NonNull String unreadable() {
+        return CampaignEditor.i18n("browse_unreadable_campaign");
+    }
+
+    @Override
+    public FileBrowserDialog.@NonNull Memory memory() {
+        return memory;
     }
 }

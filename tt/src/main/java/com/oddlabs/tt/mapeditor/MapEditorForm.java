@@ -351,7 +351,7 @@ public final class MapEditorForm extends Form {
         Path dir = mapsDir();
         if (dir == null)
             return;
-        gui_root.addModalForm(new LoadMapDialog(gui_root, dir, MapEditor.i18n("load_caption"),
+        gui_root.addModalForm(LoadMapDialog.create(gui_root, dir, MapEditor.i18n("load_caption"),
                 MapEditor.i18n("load_button"), entry -> {
             MapFile map;
             try {
@@ -375,7 +375,7 @@ public final class MapEditorForm extends Form {
             gui_root.addModalForm(new MessageForm(MapEditor.i18n("no_maps_dir")));
             return;
         }
-        gui_root.addModalForm(new LoadCampaignDialog(gui_root, dir, path -> {
+        gui_root.addModalForm(LoadCampaignDialog.create(gui_root, dir, path -> {
             CampaignSession campaign;
             try {
                 campaign = CampaignSession.open(path);

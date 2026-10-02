@@ -78,7 +78,7 @@ public final class MapEditor {
             }
         }
         Path start = dir != null ? dir : Path.of(System.getProperty("user.home"));
-        gui_root.addModalForm(new LoadMapDialog(gui_root, start, caption, action, entry -> {
+        gui_root.addModalForm(LoadMapDialog.create(gui_root, start, caption, action, entry -> {
             MapFile map;
             try {
                 // Read it all now, so a broken file is reported here rather than while the game loads.

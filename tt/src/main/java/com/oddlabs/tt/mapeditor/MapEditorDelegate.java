@@ -1511,7 +1511,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         storeLevel(tools);
         CampaignSession level_session = tools.getSession();
         String saved_name = level_session.getSavedName();
-        if (saved_name != null) {
+        // A campaign opened from another folder is saved into the campaigns folder, unless that would replace a
+        // different campaign of the same name there; then a name is asked for.
+        if (saved_name != null && !level_session.wouldReplaceOther(dir, saved_name)) {
             writeCampaign(dir, saved_name, after);
             return;
         }

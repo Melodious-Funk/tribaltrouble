@@ -11,6 +11,7 @@ import com.oddlabs.tt.gui.FocusDirection;
 import com.oddlabs.tt.gui.Form;
 import com.oddlabs.tt.gui.GUIRoot;
 import com.oddlabs.tt.gui.Group;
+import com.oddlabs.tt.gui.HorizButton;
 import com.oddlabs.tt.gui.Label;
 import com.oddlabs.tt.gui.LoadCampaignBox;
 import com.oddlabs.tt.gui.MouseButton;
@@ -37,11 +38,13 @@ import org.jspecify.annotations.Nullable;
 import java.io.FileNotFoundException;
 import java.io.InvalidClassException;
 import java.nio.file.NoSuchFileException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.ResourceBundle;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
 import static com.oddlabs.tt.gui.Placement.LEFT_MID;
+import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
 
 public final class NewCampaignForm extends Form implements DeterministicSerializerLoopbackInterface<CampaignState[]> {
     private static final int BUTTON_WIDTH = 100;
@@ -58,8 +61,9 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         return Utils.getBundleString(bundle, key, args);
     }
 
-    // Campaigns made in the campaign editor, listed after the two tribes' own.
-    private final @NonNull List<@NonNull String> custom_campaigns = CampaignEditor.playableCampaigns();
+    // Campaigns made in the campaign editor, listed after the two tribes' own; more join when browsed for.
+    private final @NonNull List<@NonNull String> custom_campaigns = new ArrayList<>(
+            CampaignEditor.playableCampaigns());
     private final @NonNull EditLine editline_name;
     private final @NonNull PulldownMenu<Void> race_pulldown;
     private final @NonNull PulldownMenu<Void> difficulty_pulldown;
@@ -93,10 +97,14 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         for (String custom : custom_campaigns)
             race_pulldown.addItem(new PulldownItem<>(CampaignEditor.i18n("custom_campaign_item", custom)));
         race_pulldown.addItemChosenListener(new RaceListener());
-        PulldownButton<Void> race_pb = new PulldownButton<>(gui_root, race_pulldown, INDEX_VIKINGS,
-                custom_campaigns.isEmpty() ? 100 : 240);
+        PulldownButton<Void> race_pb = new PulldownButton<>(gui_root, race_pulldown, INDEX_VIKINGS, 240);
+        // Finds a campaign in any folder, as one made elsewhere or handed over may not be in the campaigns folder.
+        HorizButton button_browse = new HorizButton(CampaignEditor.i18n("browse_campaigns_button"), BUTTON_WIDTH);
+        button_browse.addMouseClickListener((_, _, _, _) -> CampaignEditor.choosePlayable(gui_root,
+                this::customChosen));
         group.addChild(race_label);
         group.addChild(race_pb);
+        group.addChild(button_browse);
 
         // difficulty
         Label difficulty_label = new Label(i18n("difficulty"), Skin.getSkin().getEditFont());
@@ -113,6 +121,7 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         name_label.place(editline_name, LEFT_MID);
         race_pb.place(editline_name, BOTTOM_LEFT);
         race_label.place(race_pb, LEFT_MID);
+        button_browse.place(race_pb, RIGHT_MID);
         difficulty_pb.place(race_pb, BOTTOM_LEFT);
         difficulty_label.place(difficulty_pb, LEFT_MID);
         group.compileCanvas();
@@ -136,6 +145,17 @@ public final class NewCampaignForm extends Form implements DeterministicSerializ
         compileCanvas();
         centerPos();
         LoadCampaignBox.loadSavegames(this);
+    }
+
+    /** Picks a custom campaign browsed for, adding it to the list if it is new there. */
+    private void customChosen(@NonNull String name) {
+        int index = custom_campaigns.indexOf(name);
+        if (index == -1) {
+            custom_campaigns.add(name);
+            race_pulldown.addItem(new PulldownItem<>(CampaignEditor.i18n("custom_campaign_item", name)));
+            index = custom_campaigns.size() - 1;
+        }
+        race_pulldown.chooseItem(2 + index);
     }
 
     @Override

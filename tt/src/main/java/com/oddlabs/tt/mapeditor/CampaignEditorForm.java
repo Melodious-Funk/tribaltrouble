@@ -291,7 +291,7 @@ public final class CampaignEditorForm extends Form {
         Path dir = campaignsDir();
         if (dir == null)
             return;
-        discardThen(() -> gui_root.addModalForm(new LoadCampaignDialog(gui_root, dir, path -> {
+        discardThen(() -> gui_root.addModalForm(LoadCampaignDialog.create(gui_root, dir, path -> {
             try {
                 main_menu.setMenuCentered(new CampaignEditorForm(network, gui_root, main_menu,
                         CampaignSession.open(path)));
