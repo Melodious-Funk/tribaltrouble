@@ -68,9 +68,10 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
  * wheel sizes the brush, Shift plus the wheel sets its intensity, and the plain wheel zooms like in a game. The
  * middle button turns the view, as it does in a game.
  *
- * <p>Rivers and ridges follow a course: each left click adds a point to it, and a right click or Enter lays the
- * course, Backspace takes back its last point and Escape drops it. The copy brush copies the area dragged over, then
- * pastes it at each left click; R turns the copy and M mirrors it, and a right click or Escape drops it.
+ * <p>Paths, rivers and ridges follow a course: each left click adds a point to it, and a right click or Enter lays
+ * the course, Backspace takes back its last point and Escape drops it. A path's legs too steep to walk show red. The
+ * copy brush copies the area dragged over, then pastes it at each left click; R turns the copy and M mirrors it, and
+ * a right click or Escape drops it.
  *
  * <p>The map mode key (Space by default) flies up to the game's island overview. Another press of it flies back, and
  * a left click flies down to the clicked spot. Nothing else works while there.
@@ -86,6 +87,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final int MIN_INTENSITY = 0;
     /** Seconds between resource brush dabs while the button is held. */
     private static final float RESOURCE_DAB_INTERVAL = .05f;
+    /** The middle mouse button's number for the input provider. */
+    private static final int MIDDLE_BUTTON = 2;
     private static final int MAX_INTENSITY = 100;
     private static final int INTENSITY_STEP = 5;
     private static final int LABEL_WIDTH = 150;
@@ -161,7 +164,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // Whether resource brushes spread in clumps rather than evenly.
     private boolean natural_spread;
 
-    // The points of the river or ridge course clicked so far, in meters.
+    // The points of the course clicked so far: x and y in meters, and the ground's height there when clicked.
     private final List<float @NonNull []> course = new ArrayList<>();
     // What the copy brush last copied, which each left click pastes.
     private @Nullable Clipboard clipboard;
@@ -480,6 +483,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     /** Runs every frame: the world's animations, painting while a button is held, and pushing edits to the GPU. */
     private void tick(float t) {
+        // A release can go astray, as when it happens outside the window, and the cursor would stay hidden for good.
+        if (look != null && !Renderer.getLocalInput().getInputProvider().isButtonDown(MIDDLE_BUTTON))
+            endLook();
         world.tick(t);
         manager.runAnimations(t);
         has_cursor = !map_mode && pickCursor();
@@ -530,7 +536,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     private void selectBrush(@NonNull Brush new_brush) {
         cancelStroke();
-        // A course clicked out for a river can be raised as a ridge instead, but no other brush uses it.
+        // A course clicked out for a river can be raised as a ridge or laid as a path instead, but no other brush uses
+        // it.
         if (!new_brush.isCourse())
             course.clear();
         brush = new_brush;
@@ -701,7 +708,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     private void addCoursePoint() {
         if (has_cursor)
-            course.add(new float[]{cursor_x, cursor_y});
+            course.add(new float[]{cursor_x, cursor_y, editor.getHeight(toGrid(cursor_x), toGrid(cursor_y))});
     }
 
     private void removeCoursePoint() {
@@ -709,7 +716,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             course.removeLast();
     }
 
-    /** Digs the river or raises the ridge along the course clicked out, and starts a new one. */
+    /** Lays the path, digs the river or raises the ridge along the course clicked out, and starts a new one. */
     private void layCourse() {
         if (course.isEmpty()) {
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("no_course"));
@@ -720,13 +727,31 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             points.add(new float[]{toGrid(point[0]), toGrid(point[1])});
         BrushPath path = new BrushPath(points);
         beginTerrainStroke();
-        if (brush == Brush.RIVER)
-            editor.applyRiver(path, toGrid(radius), intensity / 100f, random.nextInt());
-        else
-            editor.applyRidge(path, toGrid(radius), intensity / 100f, random.nextInt());
+        switch (brush) {
+            case PATH -> {
+                float[] point_heights = pathHeights(course);
+                editor.applyPath(path, point_heights, toGrid(radius), intensity / 100f);
+                for (boolean steep : editor.steepLegs(path, point_heights)) {
+                    if (steep) {
+                        getGUIRoot().getInfoPrinter().print(MapEditor.i18n("path_too_steep"));
+                        break;
+                    }
+                }
+            }
+            case RIVER -> editor.applyRiver(path, toGrid(radius), intensity / 100f, random.nextInt());
+            default -> editor.applyRidge(path, toGrid(radius), intensity / 100f, random.nextInt());
+        }
         finishTerrainStroke();
         ground_settle = true;
         course.clear();
+    }
+
+    /** A path's height at each of a course's points, from the ground's height there when clicked. */
+    private float @NonNull [] pathHeights(@NonNull List<float @NonNull []> points) {
+        float[] point_heights = new float[points.size()];
+        for (int i = 0; i < point_heights.length; i++)
+            point_heights[i] = editor.pathHeight(points.get(i)[2]);
+        return point_heights;
     }
 
     // ---- Copy and paste ----
@@ -896,6 +921,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             case RIGHT -> beginStroke(-1);
             case MIDDLE -> {
                 cancelStroke();
+                endLook();
                 look = new LookDelegate();
                 getGUIRoot().pushDelegate(look);
             }
@@ -910,12 +936,18 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 picker.pickMapGoto(x, y, map_camera);
             return;
         }
-        if (button == MouseButton.MIDDLE && look != null) {
-            look.pop();
-            look = null;
-        }
+        if (button == MouseButton.MIDDLE)
+            endLook();
         if ((button == MouseButton.LEFT && stroke_sign > 0) || (button == MouseButton.RIGHT && stroke_sign < 0))
             endStroke();
+    }
+
+    /** Ends the middle button view turn, if one is under way. */
+    private void endLook() {
+        LookDelegate turning = look;
+        look = null;
+        if (turning != null)
+            turning.pop();
     }
 
     @Override
@@ -1082,21 +1114,35 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
     }
 
-    /** The course clicked so far, and on to the cursor as its next point would take it. */
+    /**
+     * The course clicked so far, and on to the cursor as its next point would take it. A path's legs too steep to
+     * walk show red.
+     */
     private void drawCourse(BrushRenderer.@NonNull Batch batch, float r, float g, float b) {
-        List<float[]> points = new ArrayList<>(course.size() + 1);
-        for (float[] point : course) {
-            batch.circle(point[0], point[1], 1.5f, r, g, b, .9f);
-            points.add(new float[]{toGrid(point[0]), toGrid(point[1])});
-        }
+        List<float[]> clicked = new ArrayList<>(course);
         if (has_cursor)
-            points.add(new float[]{toGrid(cursor_x), toGrid(cursor_y)});
+            clicked.add(new float[]{cursor_x, cursor_y, editor.getHeight(toGrid(cursor_x), toGrid(cursor_y))});
+        List<float[]> points = new ArrayList<>(clicked.size());
+        for (float[] point : clicked)
+            points.add(new float[]{toGrid(point[0]), toGrid(point[1])});
+        for (float[] point : course)
+            batch.circle(point[0], point[1], 1.5f, r, g, b, .9f);
         if (points.size() < 2)
             return;
-        float[] curve = new BrushPath(points).curve();
+        BrushPath path = new BrushPath(points);
+        boolean[] steep = brush == Brush.PATH ? editor.steepLegs(path, pathHeights(clicked)) : new boolean[0];
+        float[] knots = path.knots();
+        float[] curve = path.curve();
         float m = HeightMap.METERS_PER_UNIT_GRID;
-        for (int i = 2; i < curve.length; i += 2)
-            batch.line(curve[i - 2] * m, curve[i - 1] * m, curve[i] * m, curve[i + 1] * m, r, g, b, .9f);
+        int leg = 0;
+        for (int i = 2; i < curve.length; i += 2) {
+            float along = path.along(i / 2);
+            while (leg + 2 < knots.length && along > knots[leg + 1])
+                leg++;
+            boolean red = leg < steep.length && steep[leg];
+            batch.line(curve[i - 2] * m, curve[i - 1] * m, curve[i] * m, curve[i + 1] * m, red ? 1f : r,
+                    red ? .2f : g, red ? .2f : b, .9f);
+        }
     }
 
     // ---- Menu, saving and leaving ----
@@ -1384,11 +1430,38 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
     }
 
-    /** Turns the view with the game's first person camera while the middle button is held. */
+    /**
+     * Turns the view with the game's first person camera while the middle button is held.
+     *
+     * <p>Another button pressed meanwhile is pressed on this delegate, as it covers the screen, and so are the releases
+     * after it, the middle button's among them. Letting go of that other button also turns the drag into plain mouse
+     * moves. So this delegate follows both and ends the turn itself, as the game's first person delegate does.
+     */
     private final class LookDelegate extends CameraDelegate<FirstPersonCamera> {
         LookDelegate() {
             super(MapEditorDelegate.this.getGUIRoot(), new FirstPersonCamera(MapEditorDelegate.this,
                     world.getHeightMap(), game_camera.getState()));
+        }
+
+        @Override
+        public void mousePressed(@NonNull MouseButton button, int x, int y) {
+        }
+
+        @Override
+        public void mouseReleased(@NonNull MouseButton button, int x, int y) {
+            if (button == MouseButton.MIDDLE)
+                endLook();
+        }
+
+        @Override
+        public void mouseMoved(int x, int y) {
+            getCamera().mouseMoved(x, y);
+        }
+
+        @Override
+        public void mouseDragged(@NonNull MouseButton button, int x, int y, int relative_x, int relative_y,
+                int absolute_x, int absolute_y) {
+            getCamera().mouseMoved(x, y);
         }
 
         @Override

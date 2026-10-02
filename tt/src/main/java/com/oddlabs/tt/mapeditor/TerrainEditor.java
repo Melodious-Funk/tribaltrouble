@@ -59,6 +59,10 @@ final class TerrainEditor {
     private static final float WARP_RATE = 6f;
     /** How fast (1/seconds) erosion and beaches close the gap at full intensity. */
     private static final float ERODE_RATE = 20f;
+    /** Share of the steepest step units walk that a path climbs at most per grid unit. */
+    private static final float PATH_GRADE = .7f;
+    /** Sweeps that ease a path's bends at most; a winding path settles in a few. */
+    private static final int MAX_EASING_PASSES = 64;
     /** The four neighbours of a cell, x and y in turn. */
     private static final int[] NEIGHBOURS = {0, 1, -1, 0, 1, 0, 0, -1};
 
@@ -283,13 +287,36 @@ final class TerrainEditor {
         });
     }
 
-    /** Adds random bumps (sign 1) or dents (sign -1); the pattern is fixed for the length of a stroke. */
+    /**
+     * Heaps up random ground (sign 1) or digs it away (sign -1): knolls, hollows and ridges of many sizes, bent and
+     * turned every which way, mostly rising on one side and mostly sinking on the other. Each stroke draws its own
+     * feature size, twist and mix of rounded and ridged shapes, and how hard the ground moves wanders over the brush,
+     * so some spots rise sharply while others barely stir. The pattern holds for the length of a stroke, so holding
+     * the button builds on it.
+     */
     void applyRandom(float cx, float cy, float radius, float intensity, int sign, float dt, int seed) {
         float amount = sign * intensity * RAISE_RATE * dt;
-        // Features a few cells wide read as rough ground instead of single cell spikes.
-        float feature = Math.max(2f, radius / 3f);
-        forEachCell(cx, cy, radius, (x, y, weight) -> heights[y][x] + amount * weight * Noise.value(x / feature,
-                y / feature, seed));
+        float feature = Math.max(2f, radius * (.15f + .45f * Noise.hash(1, 0, seed)));
+        double angle = 2 * Math.PI * Noise.hash(2, 0, seed);
+        float cos = (float) Math.cos(angle);
+        float sin = (float) Math.sin(angle);
+        float warp = feature * (.4f + Noise.hash(3, 0, seed));
+        // Some strokes are all rounded, some all ridged, the rest a blend.
+        float ridged = Math.clamp(2f * Noise.hash(4, 0, seed) - .5f, 0f, 1f);
+        forEachCell(cx, cy, radius, (x, y, weight) -> {
+            // Turned and bent, so the shapes neither line up with the grid nor come out round.
+            float u = x * cos - y * sin;
+            float v = x * sin + y * cos;
+            float wu = u + warp * (2f * Noise.value(u / feature, v / feature, seed + 11) - 1f);
+            float wv = v + warp * (2f * Noise.value(u / feature, v / feature, seed + 23) - 1f);
+            // Fractal noise stays near its middle, so it is stretched to reach from hollows to tops.
+            float rounded = ridged < 1f
+                    ? Math.clamp(.5f + 2f * (Noise.fractal(wu, wv, feature, 4, seed) - .5f), 0f, 1f) : 0f;
+            float crests = ridged > 0f ? Noise.ridged(wu, wv, feature, 4, seed + 37) : 0f;
+            float shape = 1.5f * (rounded + (crests - rounded) * ridged) - .4f;
+            float strength = Noise.value(u / (feature * 3f), v / (feature * 3f), seed + 53);
+            return heights[y][x] + amount * weight * shape * (.15f + 1.7f * strength * strength);
+        });
     }
 
     /**
@@ -327,6 +354,181 @@ final class TerrainEditor {
         }
         if (changed)
             markDirty(x0, y0, x1, y1);
+    }
+
+    // ---- Paths ----
+
+    /** Meters a path may climb per grid unit, short of the steepest step units walk, to leave room for bends. */
+    float maxPathGrade() {
+        return walk_step * PATH_GRADE;
+    }
+
+    /** The height a path takes at a point clicked on ground of the given height: on it, but never in the sea. */
+    float pathHeight(float ground) {
+        return Math.max(ground, sea_level + SHORE_RISE);
+    }
+
+    /**
+     * Which legs of a path, from one clicked point to the next, climb too steeply to walk.
+     *
+     * @param point_heights the path's height at each clicked point
+     */
+    boolean @NonNull [] steepLegs(@NonNull BrushPath path, float @NonNull [] point_heights) {
+        float[] knots = path.knots();
+        boolean[] steep = new boolean[Math.max(0, knots.length - 1)];
+        for (int i = 0; i < steep.length; i++)
+            steep[i] = Math.abs(point_heights[i + 1] - point_heights[i])
+                    > maxPathGrade() * (knots[i + 1] - knots[i]) + 1e-3f;
+        return steep;
+    }
+
+    /**
+     * Lays a walkable path along a course, as wide as the brush. It runs level from side to side and climbs evenly
+     * from each clicked point's height to the next, filling ground below it and cutting ground above it, and its
+     * sides slope off into the ground around. Tight bends are eased until no step across the path is too high to
+     * walk. A leg that climbs too steeply, see {@link #steepLegs}, is eased the same way, so it cannot meet the
+     * ground at both ends.
+     *
+     * @param point_heights the path's height at each clicked point, see {@link #pathHeight}
+     * @param intensity how far beyond the path its sides slope off, from barely to another brush radius
+     */
+    void applyPath(@NonNull BrushPath path, float @NonNull [] point_heights, float radius, float intensity) {
+        float bank = 1f + intensity * radius;
+        float reach = radius + bank;
+        float[] curve = path.curve();
+        float min_x = Float.POSITIVE_INFINITY, min_y = Float.POSITIVE_INFINITY;
+        float max_x = Float.NEGATIVE_INFINITY, max_y = Float.NEGATIVE_INFINITY;
+        for (int i = 0; i < curve.length; i += 2) {
+            min_x = Math.min(min_x, curve[i]);
+            max_x = Math.max(max_x, curve[i]);
+            min_y = Math.min(min_y, curve[i + 1]);
+            max_y = Math.max(max_y, curve[i + 1]);
+        }
+        int x0 = Math.max(0, (int) Math.floor(min_x - reach));
+        int y0 = Math.max(0, (int) Math.floor(min_y - reach));
+        int x1 = Math.min(size - 1, (int) Math.ceil(max_x + reach));
+        int y1 = Math.min(size - 1, (int) Math.ceil(max_y + reach));
+        if (x0 > x1 || y0 > y1)
+            return;
+        int w = x1 - x0 + 1;
+        int h = y1 - y0 + 1;
+        // The path's height where it runs, NaN off it, and how far each cell is from its middle.
+        float[] target = new float[w * h];
+        float[] distance = new float[w * h];
+        Arrays.fill(target, Float.NaN);
+        Arrays.fill(distance, Float.POSITIVE_INFINITY);
+        float[] knots = path.knots();
+        path.forEachCellWithin(reach, size, (x, y, d, along) -> {
+            if (x < x0 || x > x1 || y < y0 || y > y1)
+                return;
+            int k = (y - y0) * w + (x - x0);
+            distance[k] = d;
+            if (d <= radius)
+                target[k] = profile(knots, point_heights, along);
+        });
+        keepWalkable(target, w, h, maxPathGrade());
+        spreadToSides(target, distance, w, h, reach);
+        boolean changed = false;
+        for (int y = y0; y <= y1; y++) {
+            for (int x = x0; x <= x1; x++) {
+                int k = (y - y0) * w + (x - x0);
+                float d = distance[k];
+                if (d >= reach || Float.isNaN(target[k]))
+                    continue;
+                float weight = d <= radius ? 1f : falloff(d - radius, bank);
+                float ground = heights[y][x];
+                heights[y][x] = clampHeight(x, y, ground + (target[k] - ground) * weight);
+                changed = true;
+            }
+        }
+        if (changed)
+            markDirty(x0, y0, x1, y1);
+    }
+
+    /** A path's height a distance along it: from each clicked point's height evenly to the next. */
+    private static float profile(float @NonNull [] knots, float @NonNull [] point_heights, float along) {
+        for (int i = 0; i + 1 < knots.length; i++) {
+            if (along <= knots[i + 1] || i + 2 == knots.length) {
+                float run = knots[i + 1] - knots[i];
+                float t = run > 0f ? Math.clamp((along - knots[i]) / run, 0f, 1f) : 1f;
+                return point_heights[i] + (point_heights[i + 1] - point_heights[i]) * t;
+            }
+        }
+        return point_heights[0];
+    }
+
+    /**
+     * Eases the heights of a w by h patch, leaving NaN cells alone, until no cell is more than a step from any
+     * neighbour: the mean of the highest such heights nowhere above the patch's and the lowest nowhere below. Where
+     * the patch already keeps to the step, as a path does along its legs, both are the patch itself and nothing moves.
+     * Where it does not, as across the inside of a tight bend where the nearest leg changes, the jump spreads out.
+     */
+    private static void keepWalkable(float @NonNull [] target, int w, int h, float step) {
+        float[] upper = target.clone();
+        float[] lower = target.clone();
+        // Each pass sweeps forwards then backwards, which settles a straight path at once and a winding one soon.
+        boolean changed = true;
+        for (int pass = 0; changed && pass < MAX_EASING_PASSES; pass++) {
+            changed = false;
+            for (int k = 0; k < target.length; k++) {
+                int x = k % w;
+                if (x > 0)
+                    changed |= ease(upper, lower, k, k - 1, step);
+                if (k >= w)
+                    changed |= ease(upper, lower, k, k - w, step);
+            }
+            for (int k = target.length - 1; k >= 0; k--) {
+                int x = k % w;
+                if (x < w - 1)
+                    changed |= ease(upper, lower, k, k + 1, step);
+                if (k + w < target.length)
+                    changed |= ease(upper, lower, k, k + w, step);
+            }
+        }
+        for (int k = 0; k < target.length; k++)
+            target[k] = (upper[k] + lower[k]) / 2f;
+    }
+
+    /** Brings a cell within a step of a neighbour, from above in upper and from below in lower. */
+    private static boolean ease(float @NonNull [] upper, float @NonNull [] lower, int k, int n, float step) {
+        if (Float.isNaN(upper[k]) || Float.isNaN(upper[n]))
+            return false;
+        boolean changed = false;
+        if (upper[n] + step < upper[k]) {
+            upper[k] = upper[n] + step;
+            changed = true;
+        }
+        if (lower[n] - step > lower[k]) {
+            lower[k] = lower[n] - step;
+            changed = true;
+        }
+        return changed;
+    }
+
+    /** Gives each cell beside the path, within reach, the height of the nearest cell of the path. */
+    private static void spreadToSides(float @NonNull [] target, float @NonNull [] distance, int w, int h,
+            float reach) {
+        int[] queue = new int[w * h];
+        int tail = 0;
+        for (int k = 0; k < target.length; k++)
+            if (!Float.isNaN(target[k]))
+                queue[tail++] = k;
+        for (int head = 0; head < tail; head++) {
+            int k = queue[head];
+            int x = k % w;
+            int y = k / w;
+            for (int i = 0; i < NEIGHBOURS.length; i += 2) {
+                int nx = x + NEIGHBOURS[i];
+                int ny = y + NEIGHBOURS[i + 1];
+                if (nx < 0 || ny < 0 || nx >= w || ny >= h)
+                    continue;
+                int n = ny * w + nx;
+                if (Float.isNaN(target[n]) && distance[n] < reach) {
+                    target[n] = target[k];
+                    queue[tail++] = n;
+                }
+            }
+        }
     }
 
     // ---- Coasts and courses ----

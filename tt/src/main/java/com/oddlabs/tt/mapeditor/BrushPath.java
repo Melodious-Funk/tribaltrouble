@@ -20,6 +20,8 @@ final class BrushPath {
     private final float @NonNull [] ys;
     // Distance along the course to each point of the curve.
     private final float @NonNull [] arc;
+    // Distance along the course to each clicked point.
+    private final float @NonNull [] knots;
 
     /** @param points the clicked points, in grid units */
     BrushPath(@NonNull List<float @NonNull []> points) {
@@ -36,6 +38,7 @@ final class BrushPath {
         xs = new float[count];
         ys = new float[count];
         arc = new float[count];
+        knots = new float[points.size()];
         xs[0] = points.getFirst()[0];
         ys[0] = points.getFirst()[1];
         int n = 1;
@@ -52,6 +55,7 @@ final class BrushPath {
                 arc[n] = arc[n - 1] + (float) Math.hypot(xs[n] - xs[n - 1], ys[n] - ys[n - 1]);
                 n++;
             }
+            knots[i + 1] = arc[n - 1];
         }
     }
 
@@ -64,6 +68,16 @@ final class BrushPath {
     /** Length of the course, in grid units. */
     float length() {
         return arc[arc.length - 1];
+    }
+
+    /** Grid units along the course to each clicked point, the first at 0 and the last at {@link #length}. */
+    float @NonNull [] knots() {
+        return knots.clone();
+    }
+
+    /** Grid units along the course to a point of the smoothed curve, counted as {@link #curve} lists them. */
+    float along(int point) {
+        return arc[point];
     }
 
     /** The points of the smoothed curve, x and y in turn, in grid units. */

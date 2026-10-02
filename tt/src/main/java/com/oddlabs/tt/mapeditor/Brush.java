@@ -11,7 +11,10 @@ enum Brush {
     SMOOTH("brush_smooth", "hint_smooth", null),
     ROUGHNESS("brush_roughness", "hint_roughness", null),
     RANDOM("brush_random", "hint_random", null),
+    /** A straight ramp dragged from one end to the other. */
     RAMP("brush_ramp", "hint_ramp", null),
+    /** A walkable path along a course clicked out a point at a time. */
+    PATH("brush_path", "hint_path", null),
     ISTHMUS("brush_isthmus", "hint_isthmus", null),
     RIVER("brush_river", "hint_river", null),
     MOUNTAIN("brush_mountain", "hint_mountain", null),
@@ -57,9 +60,9 @@ enum Brush {
         return this == RAMP || this == ISTHMUS || this == COPY;
     }
 
-    /** Rivers and ridges follow a course clicked out a point at a time, and are laid when it is done. */
+    /** Paths, rivers and ridges follow a course clicked out a point at a time, and are laid when it is done. */
     boolean isCourse() {
-        return this == RIVER || this == MOUNTAIN;
+        return this == PATH || this == RIVER || this == MOUNTAIN;
     }
 
     /** Whether this brush works on resources rather than on the terrain. */
