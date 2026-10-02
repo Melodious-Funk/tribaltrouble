@@ -17,6 +17,7 @@ import com.oddlabs.tt.form.QuestionForm;
 import com.oddlabs.tt.gui.CheckBox;
 import com.oddlabs.tt.gui.CursorType;
 import com.oddlabs.tt.gui.Form;
+import com.oddlabs.tt.gui.GUIObject;
 import com.oddlabs.tt.gui.GUIRoot;
 import com.oddlabs.tt.gui.Group;
 import com.oddlabs.tt.gui.HorizButton;
@@ -84,6 +85,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final int INTENSITY_STEP = 5;
     private static final int LABEL_WIDTH = 150;
     private static final int PULLDOWN_WIDTH = 150;
+    private static final int OVERLAY_PULLDOWN_WIDTH = 190;
     private static final int HINT_WIDTH = 760;
 
     private final @NonNull NetworkSelector network;
@@ -98,9 +100,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final @NonNull AccessMap access_map;
     private final @NonNull PlantLayer plants;
     private final @NonNull Water water;
-    private final @NonNull AccessOverlay access;
+    private final @NonNull TintOverlay tint;
     private final @NonNull EdgeOverlay edges;
-    private final @NonNull Label label_access_legend;
+    // What the overlay shows, explained below the toolbar.
+    private @Nullable Label label_legend;
+    private static final float OVERLAY_UPDATE_INTERVAL = .25f;
+    // Seconds since the overlay last followed a stroke in progress.
+    private float overlay_timer;
     // Seconds since the playable area last followed a stroke in progress.
     private float access_timer;
     // Seconds since the ground texture last followed a stroke in progress.
@@ -169,7 +175,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
-            @NonNull AccessMap access_map, @NonNull AccessOverlay access, @NonNull ResourceLayer layer,
+            @NonNull AccessMap access_map, @NonNull TintOverlay tint, @NonNull ResourceLayer layer,
             @NonNull PlantLayer plants, @NonNull Water water, @NonNull MapSettings settings,
             @Nullable String map_name, boolean edited, boolean resources_edited) {
         super(gui_root, null);
@@ -182,7 +188,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.access_map = access_map;
         this.plants = plants;
         this.water = water;
-        this.access = access;
+        this.tint = tint;
         this.settings = settings;
         this.map_name = map_name;
         this.edited = edited;
@@ -209,22 +215,22 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         PulldownButton<Brush> pulldown_terrain = new PulldownButton<>(gui_root, menu_terrain, 0, PULLDOWN_WIDTH);
         PulldownButton<Brush> pulldown_resource = new PulldownButton<>(gui_root, menu_resource, 0, PULLDOWN_WIDTH);
         radio_terrain.addMouseClickListener((_, _, _, _) -> {
-            selectBrush(chosenBrush(menu_terrain));
+            selectBrush(chosen(menu_terrain));
             setFocus();
         });
         radio_resource.addMouseClickListener((_, _, _, _) -> {
-            selectBrush(chosenBrush(menu_resource));
+            selectBrush(chosen(menu_resource));
             setFocus();
         });
         // Choosing from a dropdown also switches to it.
         menu_terrain.addItemChosenListener((menu, _) -> {
             tools.mark(radio_terrain);
-            selectBrush(chosenBrush(menu));
+            selectBrush(chosen(menu));
             setFocus();
         });
         menu_resource.addItemChosenListener((menu, _) -> {
             tools.mark(radio_resource);
-            selectBrush(chosenBrush(menu));
+            selectBrush(chosen(menu));
             setFocus();
         });
         Group group_terrain = tool(radio_terrain, pulldown_terrain);
@@ -245,23 +251,26 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             view.draw_trees = marked;
             setFocus();
         });
-        label_access_legend = new Label(MapEditor.i18n("access_legend"), Skin.getSkin().getEditFont());
-        CheckBox check_access = new CheckBox(false, MapEditor.i18n("show_access"));
-        check_access.addCheckBoxListener(marked -> {
-            access.setVisible(marked);
-            if (marked)
-                addChild(label_access_legend);
-            else
-                label_access_legend.remove();
-            placeAccessLegend();
-            setFocus();
-        });
         edges = new EdgeOverlay(editor, world.getHeightMap().getSeaLevelMeters());
-        CheckBox check_edges = new CheckBox(false, MapEditor.i18n("show_edges"));
-        check_edges.addCheckBoxListener(marked -> {
-            edges.setVisible(marked);
+        // The overlay box turns the overlay its dropdown shows on and off; choosing from the dropdown turns it on.
+        PulldownMenu<Overlay> menu_overlay = new PulldownMenu<>();
+        for (Overlay o : Overlay.values())
+            menu_overlay.addItem(new PulldownItem<>(o.getName(), o));
+        CheckBox check_overlay = new CheckBox(false, MapEditor.i18n("overlay"));
+        PulldownButton<Overlay> pulldown_overlay = new PulldownButton<>(gui_root, menu_overlay, 0,
+                OVERLAY_PULLDOWN_WIDTH);
+        check_overlay.addCheckBoxListener(marked -> {
+            showOverlay(marked ? chosen(menu_overlay) : null);
             setFocus();
         });
+        menu_overlay.addItemChosenListener((menu, _) -> {
+            if (check_overlay.isMarked())
+                showOverlay(chosen(menu));
+            else
+                check_overlay.setMarked(true);
+            setFocus();
+        });
+        Group group_overlay = tool(check_overlay, pulldown_overlay);
         CheckBox check_wireframe = new CheckBox(view.line_mode, MapEditor.i18n("wireframe"));
         check_wireframe.addCheckBoxListener(marked -> {
             view.line_mode = marked;
@@ -286,8 +295,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         toolbar.addChild(label_intensity);
         toolbar.addChild(check_trees);
         toolbar.addChild(check_wireframe);
-        toolbar.addChild(check_access);
-        toolbar.addChild(check_edges);
+        toolbar.addChild(group_overlay);
         toolbar.addChild(button_undo);
         toolbar.addChild(button_menu);
         toolbar.addChild(label_hint);
@@ -302,8 +310,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         label_controls.place(label_hint, BOTTOM_LEFT);
         check_trees.place(label_hint, RIGHT_MID);
         check_wireframe.place(check_trees, RIGHT_MID);
-        check_access.place(check_wireframe, RIGHT_MID);
-        check_edges.place(check_access, RIGHT_MID);
+        group_overlay.place(check_wireframe, RIGHT_MID, 20);
         toolbar.compileCanvas();
         addChild(toolbar);
 
@@ -311,12 +318,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     }
 
     /** A tool's button with its dropdown beside it, kept together so the row stays as tall as the dropdown. */
-    private static @NonNull Group tool(@NonNull RadioButton radio, @NonNull PulldownButton<Brush> pulldown) {
+    private static @NonNull Group tool(@NonNull GUIObject button, @NonNull PulldownButton<?> pulldown) {
         Group group = new Group();
-        group.addChild(radio);
+        group.addChild(button);
         group.addChild(pulldown);
-        radio.place();
-        pulldown.place(radio, RIGHT_MID);
+        button.place();
+        pulldown.place(button, RIGHT_MID);
         group.compileCanvas();
         return group;
     }
@@ -401,13 +408,29 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     public void displayChangedNotify(int width, int height) {
         super.displayChangedNotify(width, height);
         toolbar.setPos((width - toolbar.getWidth()) / 2, height - toolbar.getHeight());
-        placeAccessLegend();
+        placeLegend();
     }
 
     /** Just below the toolbar, centred. */
-    private void placeAccessLegend() {
-        label_access_legend.setPos((getWidth() - label_access_legend.getWidth()) / 2,
-                toolbar.getY() - label_access_legend.getHeight() - 4);
+    private void placeLegend() {
+        Label legend = label_legend;
+        if (legend != null)
+            legend.setPos((getWidth() - legend.getWidth()) / 2, toolbar.getY() - legend.getHeight() - 4);
+    }
+
+    /** Lays an overlay over the island with its legend below the toolbar, or takes it away when null. */
+    private void showOverlay(@Nullable Overlay overlay) {
+        tint.show(overlay);
+        edges.setVisible(overlay == Overlay.EDGES);
+        if (label_legend != null)
+            label_legend.remove();
+        label_legend = null;
+        if (overlay != null) {
+            Label legend = new Label(overlay.getLegend(), Skin.getSkin().getEditFont());
+            addChild(legend);
+            label_legend = legend;
+            placeLegend();
+        }
     }
 
     @Override
@@ -464,7 +487,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         return meters / HeightMap.METERS_PER_UNIT_GRID;
     }
 
-    private static @NonNull Brush chosenBrush(@NonNull PulldownMenu<Brush> menu) {
+    private static <T> @NonNull T chosen(@NonNull PulldownMenu<T> menu) {
         return Objects.requireNonNull(menu.getItem(menu.getChosenItemIndex()).getAttachment());
     }
 
@@ -577,13 +600,19 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         access_timer += t;
         if (access_map.isStale() && (stroke_sign == 0 || access_timer >= ACCESS_UPDATE_INTERVAL))
             sortAccess();
-        access.update(Renderer.getRenderer().getRenderContext());
+        // Capturing the island for the overlay takes a moment on a large one, so a stroke only brings it along now
+        // and then.
+        overlay_timer += t;
+        boolean now = stroke_sign == 0 || overlay_timer >= OVERLAY_UPDATE_INTERVAL;
+        if (now)
+            overlay_timer = 0f;
+        tint.update(Renderer.getRenderer().getRenderContext(), now);
     }
 
     private void sortAccess() {
         access_timer = 0f;
         access_map.compute();
-        access.mapChanged();
+        tint.mapChanged();
         // The ground under them changed, so plants and the sea's open water follow the sort too.
         plants.update();
         water.updateOceanPatches();
@@ -968,7 +997,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     @Override
     public void render3D(@NonNull LandscapeRenderer renderer, @NonNull RenderQueues render_queues,
             @NonNull CameraState state, @NonNull MatrixStack model_view, @NonNull MatrixStack projection) {
-        access.render(Renderer.getRenderer().getRenderContext(), renderer, state);
+        tint.render(Renderer.getRenderer().getRenderContext(), renderer, state);
         edges.render(Renderer.getRenderer().getRenderContext(), state);
         if (map_mode || getGUIRoot().getModalDelegate() != null)
             return;
@@ -1100,7 +1129,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private void leave() {
         if (ground != null)
             ground.close();
-        access.close();
+        tint.close();
         edges.close();
         Renderer.startMenu(network, getGUIRoot().getGUI());
     }

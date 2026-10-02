@@ -14,6 +14,7 @@ import com.oddlabs.tt.render.state.RenderContext;
 import com.oddlabs.tt.render.state.ScopedState;
 import com.oddlabs.tt.vbo.FloatVBO;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
@@ -26,21 +27,22 @@ import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
- * Tints the ground by {@link AccessMap}: the playable region, walkable ground cut off from it, and land too steep to
- * walk, each in its own colour. Colours are set per height map cell and blend between cells, so a region's border
- * shades into the cliff beside it.
+ * Tints the ground with the chosen {@link Overlay}, one colour per height map cell blending between cells, so a
+ * region's border shades into the cliff beside it.
+ *
+ * <p>The island is measured and the tint painted on a worker thread, from the island as it was when the work
+ * began, so measuring a large island does not stall the editor; the tint catches up a moment after an edit.
  *
  * <p>It draws the landscape's own patch mesh again over the patches the landscape drew this frame, placed from the
  * height texture exactly as {@code LandscapeShader} places it, and blends the tint over the ground.
  */
-final class AccessOverlay implements AutoCloseable {
-    // Premultiplied colours: red, green, blue, opacity.
-    private static final float[] REGION = {0.15f, 0.85f, 0.25f, 0.35f};
-    private static final float[] CUT_OFF = {1f, 0.6f, 0.05f, 0.45f};
-    private static final float[] CLIFF = {0.95f, 0.1f, 0.1f, 0.5f};
-
+final class TintOverlay implements AutoCloseable {
     private static final String VERTEX_SHADER = """
             #version 410 core
             """ + ShaderProgram.GLOBAL_STATE_BLOCK + """
@@ -88,78 +90,126 @@ final class AccessOverlay implements AutoCloseable {
         }
     }
 
-    private final @NonNull AccessMap map;
+    private final float @NonNull [] @NonNull [] heights;
+    private final @NonNull AccessMap access;
+    private final float height_scale;
+    private MapAnalysis.@NonNull Resources resources = (_, _) -> null;
     private final int size;
     private final @NonNull OverlayShader shader = new OverlayShader();
     private final @NonNull PatchMesh patch_mesh = new PatchMesh();
     private final @NonNull Texture overlay;
+    // Painted by the worker, then uploaded here; only one painting is under way at a time.
     private final @NonNull ByteBuffer upload;
     private @NonNull FloatVBO instances = new FloatVBO(GL15.GL_STREAM_DRAW, 1024 * 2);
     private @NonNull FloatBuffer instance_buffer = BufferUtils.createFloatBuffer(1024 * 2);
+    private final @NonNull ExecutorService worker = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "Map editor overlay");
+        thread.setDaemon(true);
+        return thread;
+    });
 
-    private final int region_texel = texel(REGION);
-    private final int cut_off_texel = texel(CUT_OFF);
-    private final int cliff_texel = texel(CLIFF);
-
-    private boolean visible;
-    private boolean stale = true;
+    private @Nullable Overlay shown;
+    // Bumped by every change to the island.
+    private int version;
+    // The painting under way: the overlay and the version it paints.
+    private @Nullable Future<?> painting;
+    private @Nullable Overlay painting_overlay;
+    private int painting_version;
+    // The version the texture holds, or -1 when it holds nothing worth showing.
+    private int painted = -1;
     private boolean closed;
 
-    AccessOverlay(@NonNull AccessMap map) {
-        this.map = map;
-        this.size = map.getSize();
+    /**
+     * @param heights the height map in meters, as the terrain editor keeps it
+     */
+    TintOverlay(float @NonNull [] @NonNull [] heights, @NonNull AccessMap access, @NonNull MapSettings settings) {
+        this.heights = heights;
+        this.access = access;
+        this.height_scale = settings.getHeightScale();
+        this.size = access.getSize();
         this.overlay = new Texture(size, size, GL11.GL_RGBA8, GL11.GL_LINEAR, GL11.GL_LINEAR, GL11.GL_REPEAT);
         this.upload = BufferUtils.createByteBuffer(size * size * 4);
     }
 
-    /** A colour as the four bytes of an RGBA texel, premultiplied, read as one int in the buffer's byte order. */
-    private int texel(float @NonNull [] color) {
+    /** Gives the resources to measure; the layer is built after this, as it reports its changes here. */
+    void setResources(MapAnalysis.@NonNull Resources resources) {
+        this.resources = resources;
+        mapChanged();
+    }
+
+    /** Notes that the island changed: the playable area was sorted again, or resources came or went. */
+    void mapChanged() {
+        version++;
+    }
+
+    /** A colour as the four bytes of an RGBA texel, premultiplied, read as one int in a buffer's native byte order. */
+    static int texel(float red, float green, float blue, float opacity) {
         ByteBuffer bytes = BufferUtils.createByteBuffer(4);
-        for (int i = 0; i < 4; i++)
-            bytes.put((byte) Math.round(255 * color[i] * (i < 3 ? color[3] : 1f)));
+        bytes.put((byte) Math.round(255 * red * opacity));
+        bytes.put((byte) Math.round(255 * green * opacity));
+        bytes.put((byte) Math.round(255 * blue * opacity));
+        bytes.put((byte) Math.round(255 * opacity));
         return bytes.flip().getInt();
     }
 
-    boolean isVisible() {
-        return visible;
+    /** Shows an overlay's tint, or none. */
+    void show(@Nullable Overlay chosen) {
+        Overlay tint = chosen != null && chosen.isTint() ? chosen : null;
+        if (tint != shown)
+            painted = -1;
+        shown = tint;
     }
 
-    void setVisible(boolean visible) {
-        this.visible = visible;
-    }
-
-    /** Notes that the map was sorted again; connections can change anywhere, so the whole overlay is redone. */
-    void mapChanged() {
-        stale = true;
-    }
-
-    /** Uploads the tints if the overlay is shown and behind the map. */
-    void update(@NonNull RenderContext context) {
-        if (!visible || !stale || closed)
+    /**
+     * Uploads a finished painting, and starts painting again if the island changed since the last one began.
+     *
+     * @param now whether to start now; while a stroke goes on it is only now and then, as capturing the island
+     *         takes a moment on a large one
+     */
+    void update(@NonNull RenderContext context, boolean now) {
+        if (closed)
             return;
-        stale = false;
-        IntBuffer texels = upload.clear().asIntBuffer();
-        for (int y = 0; y < size; y++) {
-            for (int x = 0; x < size; x++) {
-                texels.put(switch (map.get(x, y)) {
-                    case REGION -> region_texel;
-                    case CUT_OFF -> cut_off_texel;
-                    case CLIFF -> cliff_texel;
-                    case NONE -> 0;
-                });
+        Future<?> under_way = painting;
+        if (under_way != null) {
+            if (!under_way.isDone())
+                return;
+            painting = null;
+            try {
+                under_way.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (ExecutionException e) {
+                throw new IllegalStateException("Could not measure the island", e.getCause());
+            }
+            // An overlay chosen since is painted afresh.
+            if (painting_overlay == shown) {
+                upload(context);
+                painted = painting_version;
             }
         }
+        Overlay current = shown;
+        if (current == null || painted == version || (painted != -1 && !now))
+            return;
+        MapAnalysis analysis = MapAnalysis.capture(heights, access, resources, height_scale);
+        painting_overlay = current;
+        painting_version = version;
+        painting = worker.submit(() -> current.paint(analysis, upload.clear().asIntBuffer()));
+    }
+
+    private void upload(@NonNull RenderContext context) {
         GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 0);
         GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_PIXELS, 0);
         GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_ROWS, 0);
         GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4);
         context.setTexture(0, overlay);
-        GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, size, size, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, upload);
+        GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, size, size, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE,
+                upload.clear());
     }
 
     /** Draws the tint over the ground the landscape just drew, from a delegate's render3D. */
     void render(@NonNull RenderContext context, @NonNull LandscapeRenderer landscape, @NonNull CameraState state) {
-        if (!visible || closed)
+        if (shown == null || painted == -1 || closed)
             return;
         // The water reflection is drawn from a camera mirrored below the sea; the tint has no place in it.
         if (state.getCurrentZ() < landscape.getHeightMap().getSeaLevelMeters())
@@ -226,6 +276,7 @@ final class AccessOverlay implements AutoCloseable {
     public void close() {
         // The editor keeps drawing while the screen fades out, so later calls must do nothing.
         closed = true;
+        worker.shutdownNow();
         shader.close();
         patch_mesh.delete();
         overlay.close();
