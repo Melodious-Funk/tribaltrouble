@@ -107,7 +107,8 @@ final class SharedMapStore {
         return new SharedMap(hash, info.getProperty("name"), info.getProperty("author"),
                 Integer.parseInt(info.getProperty("size")), Integer.parseInt(info.getProperty("terrain")),
                 Boolean.parseBoolean(info.getProperty("edited")), Integer.parseInt(info.getProperty("file_size")),
-                Long.parseLong(info.getProperty("uploaded")), Integer.parseInt(info.getProperty("downloads", "0")));
+                Long.parseLong(info.getProperty("uploaded")), Integer.parseInt(info.getProperty("downloads", "0")),
+                info.getProperty("description", ""));
     }
 
     private void writeInfo(@NonNull SharedMap map) throws IOException {
@@ -120,6 +121,7 @@ final class SharedMapStore {
         info.setProperty("file_size", Integer.toString(map.getFileSize()));
         info.setProperty("uploaded", Long.toString(map.getUploaded()));
         info.setProperty("downloads", Integer.toString(map.getDownloads()));
+        info.setProperty("description", map.getDescription());
         Path temp = Files.createTempFile(dir, map.getHash(), ".tmp");
         try {
             try (OutputStream out = Files.newOutputStream(temp)) {
@@ -188,7 +190,7 @@ final class SharedMapStore {
             Files.deleteIfExists(temp);
         }
         SharedMap map = new SharedMap(hash, name, author, header.size(), header.terrain(), header.edited(),
-                file.length, System.currentTimeMillis(), 0);
+                file.length, System.currentTimeMillis(), 0, censor(header.description()));
         writeInfo(map);
         maps.put(hash, map);
         return map;
@@ -219,7 +221,8 @@ final class SharedMapStore {
 
     private void countDownload(@NonNull SharedMap map) {
         SharedMap counted = new SharedMap(map.getHash(), map.getName(), map.getAuthor(), map.getSize(),
-                map.getTerrainType(), map.isEdited(), map.getFileSize(), map.getUploaded(), map.getDownloads() + 1);
+                map.getTerrainType(), map.isEdited(), map.getFileSize(), map.getUploaded(), map.getDownloads() + 1,
+                map.getDescription());
         maps.put(map.getHash(), counted);
         try {
             writeInfo(counted);
@@ -269,6 +272,14 @@ final class SharedMapStore {
             MatchmakingServer.getLogger().log(Level.WARNING, "Could not delete shared map " + hash, e);
         }
         return true;
+    }
+
+    /** A description as others may read it: banned words starred out, line by line as the filter splits on spaces. */
+    private static @NonNull String censor(@NonNull String description) {
+        String[] lines = description.split("\n", -1);
+        for (int i = 0; i < lines.length; i++)
+            lines[i] = BannedWordFilter.censorChatMessage(lines[i]);
+        return String.join("\n", lines);
     }
 
     static @NonNull String sha256(byte @NonNull [] data) {

@@ -77,7 +77,8 @@ final class JoinSessionForm extends Form implements EditorSession.JoinListener {
         joining = null;
         remove();
         ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, map.settings(),
-                map.name(), map.heights(), map.resources(), new MapEditorLoader.SessionStart.Join(session)));
+                map.name(), map.description(), map.heights(), map.resources(),
+                new MapEditorLoader.SessionStart.Join(session)));
     }
 
     @Override

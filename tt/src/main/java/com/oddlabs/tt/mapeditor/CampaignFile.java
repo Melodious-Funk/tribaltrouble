@@ -24,8 +24,8 @@ import java.util.zip.GZIPOutputStream;
  * saves it plus the level's {@link Scenario}.
  *
  * <p>The file is a gzipped stream of the magic, a version, the description, the level count, each level's title (so
- * listing campaigns reads little), and then per level the map as {@link MapFile#writeBody} writes it and the
- * scenario. The campaign's name is the file name.
+ * listing campaigns reads little), and then per level the map as {@link MapFile#writeBody} writes it at
+ * {@link #MAP_VERSION}, and the scenario. The campaign's name is the file name.
  */
 final class CampaignFile {
     static final String EXTENSION = ".ttcampaign";
@@ -33,6 +33,9 @@ final class CampaignFile {
     private static final int MAGIC = 0x54_54_43_50; // "TTCP"
     private static final int VERSION = 1;
     private static final int MAX_LEVELS = 1000;
+    // The map version the levels' islands are kept in. The file does not say, so it stays at what campaigns were
+    // first saved with; a level has its briefing rather than a map's description.
+    private static final int MAP_VERSION = 3;
 
     /** One level: an island and what happens on it. */
     static final class Level {
@@ -92,7 +95,7 @@ final class CampaignFile {
                 for (Level level : levels)
                     out.writeUTF(level.scenario.title);
                 for (Level level : levels) {
-                    new MapFile("", level.settings, level.heights, level.resources, level.preview).writeBody(out);
+                    new MapFile("", level.settings, level.heights, level.resources, level.preview).writeBody(out, MAP_VERSION);
                     level.scenario.write(out);
                 }
             }
@@ -131,7 +134,7 @@ final class CampaignFile {
     }
 
     private static @NonNull Level readLevel(@NonNull DataInputStream in) throws IOException {
-        MapFile map = MapFile.readBody(in, MapFile.BODY_VERSION, "");
+        MapFile map = MapFile.readBody(in, MAP_VERSION, "");
         Scenario scenario = Scenario.read(in);
         return new Level(map.settings(), map.heights(), map.resources(), map.preview(), scenario);
     }

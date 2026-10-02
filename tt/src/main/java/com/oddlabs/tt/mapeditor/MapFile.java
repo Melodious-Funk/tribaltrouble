@@ -25,23 +25,37 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 /**
- * A saved editor map: the generator settings plus, once edited, the whole height map and the resources.
+ * A saved editor map: the generator settings and a description plus, once edited, the whole height map and the
+ * resources.
  *
  * <p>What was never edited is generated again from the settings when the map is loaded. The file is a gzipped
- * stream of the magic, a version, the settings, whether heights, resources and a preview follow, an optional
- * preview picture, an optional square grid of heights in meters, and optionally the grid positions of each kind
- * of resource. The preview comes before the heights so browsing maps reads little of each file. Version 1 files
- * have no resources, and versions before 3 no preview, nor the flags for them.
+ * stream of the magic, a version, the settings, whether heights, resources and a preview follow, the description,
+ * an optional preview picture, an optional square grid of heights in meters, and optionally the grid positions of
+ * each kind of resource. The description and preview come before the heights so browsing maps reads little of each
+ * file. Version 1 files have no resources, versions before 3 no preview, nor the flags for them, and versions before
+ * 4 no description.
  */
 record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
-               @Nullable Resources resources, @Nullable MapPreview preview) {
+               @Nullable Resources resources, @Nullable MapPreview preview, @NonNull String description) {
     static final String EXTENSION = ".ttmap";
     /** The newest map version, which {@link #writeBody} writes. */
     static final int BODY_VERSION = MapFileHeader.VERSION;
+    static final int MAX_DESCRIPTION_LENGTH = MapFileHeader.MAX_DESCRIPTION_LENGTH;
 
     // The server reads the start of the file too, in MapFileHeader; keep the two in step.
     private static final int MAGIC = MapFileHeader.MAGIC;
     private static final int VERSION = BODY_VERSION;
+
+    MapFile {
+        if (description.length() > MAX_DESCRIPTION_LENGTH)
+            description = description.substring(0, MAX_DESCRIPTION_LENGTH);
+    }
+
+    /** A map without a description. */
+    MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
+            @Nullable Resources resources, @Nullable MapPreview preview) {
+        this(name, settings, heights, resources, preview, "");
+    }
 
     /** Grid positions of every resource, one list per kind in {@link Resource} order. */
     record Resources(@NonNull List<int @NonNull []> @NonNull [] positions) {
@@ -53,7 +67,7 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
 
     /** A saved map as listed in the load dialog, without reading its heights. */
     record Entry(@NonNull String name, @NonNull Path path, @NonNull MapSettings settings, boolean edited,
-                 @NonNull FileTime modified) {
+                 @NonNull String description, @NonNull FileTime modified) {
     }
 
     static int getMaxNameLength() {
@@ -111,16 +125,25 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(stream)))) {
             out.writeInt(MAGIC);
             out.writeInt(VERSION);
-            writeBody(out);
+            writeBody(out, VERSION);
         }
     }
 
-    /** Writes everything after the magic and version, as a campaign file also keeps its levels. */
-    void writeBody(@NonNull DataOutputStream out) throws IOException {
+    /**
+     * Writes everything after the magic and version, as a campaign file also keeps its levels.
+     *
+     * @param version the map version to write, from 3, the first with all the flags, to {@link #BODY_VERSION}; a
+     *                version before 4 leaves out the description
+     */
+    void writeBody(@NonNull DataOutputStream out, int version) throws IOException {
+        if (version < 3 || version > BODY_VERSION)
+            throw new IllegalArgumentException("Cannot write map version " + version);
         writeSettings(out, settings);
         out.writeBoolean(heights != null);
         out.writeBoolean(resources != null);
         out.writeBoolean(preview != null);
+        if (version >= 4)
+            out.writeUTF(description);
         if (preview != null) {
             out.writeShort(preview.size());
             out.write(preview.rgb());
@@ -165,6 +188,7 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         boolean has_heights = in.readBoolean();
         boolean has_resources = version >= 2 && in.readBoolean();
         boolean has_preview = version >= 3 && in.readBoolean();
+        String description = readDescription(in, version);
         MapPreview preview = has_preview ? readPreview(in) : null;
         float[][] heights = null;
         if (has_heights) {
@@ -200,7 +224,16 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         }
         if (preview == null && heights != null)
             preview = MapPreview.render(heights, settings, resources);
-        return new MapFile(name, settings, heights, resources, preview);
+        return new MapFile(name, settings, heights, resources, preview, description);
+    }
+
+    private static @NonNull String readDescription(@NonNull DataInputStream in, int version) throws IOException {
+        if (version < 4)
+            return "";
+        String description = in.readUTF();
+        if (description.length() > MAX_DESCRIPTION_LENGTH)
+            throw new IOException("Description too long");
+        return description;
     }
 
     /**
@@ -217,6 +250,7 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
             if (version >= 2)
                 in.readBoolean(); // Whether resources follow; they come after the preview.
             boolean has_preview = version >= 3 && in.readBoolean();
+            readDescription(in, version);
             if (has_preview)
                 return readPreview(in);
         }
@@ -248,7 +282,11 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                     boolean edited = in.readBoolean();
                     if (version >= 2 && in.readBoolean())
                         edited = true;
-                    entries.add(new Entry(nameOf(path), path, settings, edited, Files.getLastModifiedTime(path)));
+                    if (version >= 3)
+                        in.readBoolean(); // Whether a preview follows; the description comes first.
+                    String description = readDescription(in, version);
+                    entries.add(new Entry(nameOf(path), path, settings, edited, description,
+                            Files.getLastModifiedTime(path)));
                 } catch (IOException e) {
                     IO.println("Skipping unreadable map " + path + ": " + e);
                 }

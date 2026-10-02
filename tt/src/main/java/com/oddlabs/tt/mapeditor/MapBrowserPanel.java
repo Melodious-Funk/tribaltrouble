@@ -15,6 +15,7 @@ import com.oddlabs.tt.gui.MultiColumnComboBox;
 import com.oddlabs.tt.gui.Panel;
 import com.oddlabs.tt.gui.Row;
 import com.oddlabs.tt.gui.Skin;
+import com.oddlabs.tt.gui.TextBox;
 import com.oddlabs.tt.guievent.RowListener;
 import com.oddlabs.tt.net.Network;
 import com.oddlabs.tt.util.ServerMessageBundler;
@@ -54,6 +55,7 @@ public final class MapBrowserPanel extends Panel {
     private final @NonNull Label label_author;
     private final @NonNull Label label_uploaded;
     private final @NonNull Label label_downloads;
+    private final @NonNull TextBox box_description;
     private final @NonNull HorizButton button_download;
     private final @NonNull HorizButton button_delete;
     // The map to select once the list comes back from the server.
@@ -88,6 +90,11 @@ public final class MapBrowserPanel extends Panel {
         label_author = new Label("", font, PREVIEW_SIZE);
         label_uploaded = new Label("", font, PREVIEW_SIZE);
         label_downloads = new Label("", font, PREVIEW_SIZE);
+        // The description fills the rest of the height beside the list.
+        int spacing = Skin.getSkin().getFormData().objectSpacing();
+        box_description = new TextBox(PREVIEW_SIZE, Math.max(2 * font.getHeight(), list.getHeight() - PREVIEW_SIZE
+                - label_author.getHeight() - label_uploaded.getHeight() - label_downloads.getHeight() - spacing), font,
+                MapFile.MAX_DESCRIPTION_LENGTH);
 
         HorizButton button_update = new HorizButton(MapEditor.i18n("shared_update"), BUTTON_WIDTH_EXTRA_LONG);
         button_update.addMouseClickListener((_, _, _, _) -> refresh());
@@ -117,6 +124,7 @@ public final class MapBrowserPanel extends Panel {
         addChild(label_author);
         addChild(label_uploaded);
         addChild(label_downloads);
+        addChild(box_description);
         addChild(button_update);
         addChild(button_upload);
         addChild(button_download);
@@ -127,6 +135,7 @@ public final class MapBrowserPanel extends Panel {
         label_author.place(view, BOTTOM_LEFT);
         label_uploaded.place(label_author, BOTTOM_LEFT);
         label_downloads.place(label_uploaded, BOTTOM_LEFT);
+        box_description.place(label_downloads, BOTTOM_LEFT, spacing);
         button_update.place(list, BOTTOM_LEFT);
         button_upload.place(button_update, RIGHT_MID);
         button_download.place(button_upload, RIGHT_MID);
@@ -183,12 +192,14 @@ public final class MapBrowserPanel extends Panel {
             label_author.set("");
             label_uploaded.set("");
             label_downloads.set("");
+            LoadMapDialog.showDescription(box_description, null);
         } else {
             view.show(map.getHash(), map.getName(), map.getSize(), map.getTerrainType());
             label_author.set(MapEditor.i18n("shared_author", map.getAuthor()));
             label_uploaded.set(MapEditor.i18n("shared_uploaded_on", DATE_FORMAT.format(Instant.ofEpochMilli(
                     map.getUploaded()))));
             label_downloads.set(MapEditor.i18n("shared_downloads", map.getDownloads()));
+            LoadMapDialog.showDescription(box_description, map.getDescription());
         }
         button_download.setDisabled(map == null);
         button_delete.setDisabled(map == null || !isMine(map));

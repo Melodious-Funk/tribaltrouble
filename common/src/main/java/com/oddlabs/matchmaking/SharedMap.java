@@ -12,7 +12,7 @@ import java.io.Serializable;
  */
 public final class SharedMap implements Serializable {
     @Serial
-    private static final long serialVersionUID = 1;
+    private static final long serialVersionUID = 2;
 
     /** Bytes of a map file sent in one event, well under the limit of an ARMI event. */
     public static final int CHUNK_SIZE = 16000;
@@ -36,9 +36,10 @@ public final class SharedMap implements Serializable {
     private final int file_size;
     private final long uploaded;
     private final int downloads;
+    private final @NonNull String description;
 
     public SharedMap(@NonNull String hash, @NonNull String name, @NonNull String author, int size, int terrain,
-            boolean edited, int file_size, long uploaded, int downloads) {
+            boolean edited, int file_size, long uploaded, int downloads, @NonNull String description) {
         this.hash = hash;
         this.name = name;
         this.author = author;
@@ -48,6 +49,7 @@ public final class SharedMap implements Serializable {
         this.file_size = file_size;
         this.uploaded = uploaded;
         this.downloads = downloads;
+        this.description = description;
     }
 
     /** Whether a name can be shown and used as a file name on every platform the game ships on. */
@@ -116,5 +118,10 @@ public final class SharedMap implements Serializable {
 
     public int getDownloads() {
         return downloads;
+    }
+
+    /** What the map's maker wrote about it, as the server lets others read it; empty when there is nothing. */
+    public @NonNull String getDescription() {
+        return description;
     }
 }

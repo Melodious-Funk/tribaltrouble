@@ -42,6 +42,7 @@ final class MapEditorLoader implements LoadCallback {
     private final @NonNull NetworkSelector network;
     private final @NonNull MapSettings settings;
     private final @Nullable String map_name;
+    private final @NonNull String description;
     private final float @Nullable [] @Nullable [] heights;
     private final MapFile.@Nullable Resources resources;
     private final @NonNull SessionStart session;
@@ -64,28 +65,25 @@ final class MapEditorLoader implements LoadCallback {
     }
 
     MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings, @Nullable String map_name,
-            float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources) {
-        this(network, settings, map_name, heights, resources, new SessionStart.None());
-    }
-
-    MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings, @Nullable String map_name,
-            float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources,
-            @NonNull SessionStart session) {
-        this(network, settings, map_name, heights, resources, session, null);
+            @NonNull String description, float @Nullable [] @Nullable [] heights,
+            MapFile.@Nullable Resources resources, @NonNull SessionStart session) {
+        this(network, settings, map_name, description, heights, resources, session, null);
     }
 
     /** Opens a campaign's level, its island with its tribes' units and buildings. */
     MapEditorLoader(@NonNull NetworkSelector network, @NonNull CampaignSession campaign_session) {
-        this(network, campaign_session.getLevel().settings, null, campaign_session.getLevel().heights,
+        this(network, campaign_session.getLevel().settings, null, "", campaign_session.getLevel().heights,
                 campaign_session.getLevel().resources, new SessionStart.None(), campaign_session);
     }
 
     private MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings,
-            @Nullable String map_name, float @Nullable [] @Nullable [] heights, MapFile.@Nullable Resources resources,
-            @NonNull SessionStart session, @Nullable CampaignSession campaign_session) {
+            @Nullable String map_name, @NonNull String description, float @Nullable [] @Nullable [] heights,
+            MapFile.@Nullable Resources resources, @NonNull SessionStart session,
+            @Nullable CampaignSession campaign_session) {
         this.network = network;
         this.settings = settings;
         this.map_name = map_name;
+        this.description = description;
         this.heights = heights;
         this.resources = resources;
         this.session = session;
@@ -211,8 +209,8 @@ final class MapEditorLoader implements LoadCallback {
             matchResources(layer, editor.getSize(), resources);
         MapEditorDelegate delegate = new MapEditorDelegate(network, gui_root, world, manager, picker, view,
                 new CameraState(generator.getFogInfo()), editor, ground, access_map, tint, layer,
-                new PlantLayer(world, access_map), renderer.getWater(), settings, map_name, edited, resources != null,
-                link, campaign);
+                new PlantLayer(world, access_map), renderer.getWater(), settings, map_name, description, edited,
+                resources != null, link, campaign);
         Renderer.getRenderer().setMusicPath("/music/menu.ogg", 0f);
         gui_root.pushDelegate(delegate);
         switch (session) {

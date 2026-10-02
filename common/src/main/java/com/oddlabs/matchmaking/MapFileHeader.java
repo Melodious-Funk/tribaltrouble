@@ -14,19 +14,24 @@ import java.util.zip.GZIPInputStream;
  * it: the island settings, whether it was edited, and its preview picture.
  *
  * <p>A map file is a gzipped stream of the magic, a version, six settings, whether heights, resources (version 2
- * on) and a preview (version 3 on) follow, then the preview as a side length and three bytes per pixel.
+ * on) and a preview (version 3 on) follow, the description (version 4 on, in modified UTF-8 as
+ * {@link java.io.DataOutput#writeUTF} writes it), then the preview as a side length and three bytes per pixel.
  *
  * @param size         the island size, as in {@link Game#getSize()}
  * @param terrain      the terrain type, as in {@link Game#getTerrainType()}
  * @param preview_size pixels along each side of the preview, or 0 when the file has none
+ * @param description  what the map's maker wrote about it; empty when the file has none
  * @param preview_rgb  three bytes per pixel, rows from south to north, or null when the file has no preview
  */
 public record MapFileHeader(int version, int size, int terrain, int hills, int trees, int supplies, int seed,
-                            boolean edited, int preview_size, byte @Nullable [] preview_rgb) {
+                            boolean edited, @NonNull String description, int preview_size,
+                            byte @Nullable [] preview_rgb) {
 
     public static final int MAGIC = 0x54_54_4D_50; // "TTMP"
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
     public static final int MAX_PREVIEW_SIZE = 256;
+    /** The longest description a map may have, in characters. */
+    public static final int MAX_DESCRIPTION_LENGTH = 500;
 
     /** Reads the header of a whole map file. */
     public static @NonNull MapFileHeader read(byte @NonNull [] file) throws IOException {
@@ -49,6 +54,9 @@ public record MapFileHeader(int version, int size, int terrain, int hills, int t
             if (version >= 2 && in.readBoolean())
                 edited = true;
             boolean has_preview = version >= 3 && in.readBoolean();
+            String description = version >= 4 ? in.readUTF() : "";
+            if (description.length() > MAX_DESCRIPTION_LENGTH)
+                throw new IOException("Description too long");
             int preview_size = 0;
             byte[] rgb = null;
             if (has_preview) {
@@ -58,8 +66,8 @@ public record MapFileHeader(int version, int size, int terrain, int hills, int t
                 rgb = new byte[preview_size * preview_size * 3];
                 in.readFully(rgb);
             }
-            return new MapFileHeader(version, size, terrain, hills, trees, supplies, seed, edited, preview_size,
-                    rgb);
+            return new MapFileHeader(version, size, terrain, hills, trees, supplies, seed, edited, description,
+                    preview_size, rgb);
         }
     }
 

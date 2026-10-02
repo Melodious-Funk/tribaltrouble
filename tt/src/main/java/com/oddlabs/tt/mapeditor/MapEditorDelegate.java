@@ -169,6 +169,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private @Nullable String hover_text;
 
     private @Nullable String map_name;
+    // What the map's maker wrote about it, saved with it.
+    private @NonNull String description;
     // Whether the heights differ from what the settings generate, so saving must keep them.
     private boolean edited;
 
@@ -222,7 +224,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             @NonNull CameraState camera_state, @NonNull TerrainEditor editor, @Nullable GroundTextures ground,
             @NonNull AccessMap access_map, @NonNull TintOverlay tint, @NonNull ResourceLayer layer,
             @NonNull PlantLayer plants, @NonNull Water water, @NonNull MapSettings settings,
-            @Nullable String map_name, boolean edited, boolean resources_edited, SessionSync.@NonNull Link link,
+            @Nullable String map_name, @NonNull String description, boolean edited, boolean resources_edited,
+            SessionSync.@NonNull Link link,
             @Nullable CampaignTools campaign) {
         super(gui_root, null);
         this.link = link;
@@ -238,6 +241,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.tint = tint;
         this.settings = settings;
         this.map_name = map_name;
+        this.description = description;
         this.edited = edited;
         this.layer = layer;
         this.resources_edited = resources_edited;
@@ -1333,7 +1337,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("no_maps_dir")));
             return;
         }
-        getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), dir, map_name != null ? map_name : "", name -> {
+        getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), dir, map_name != null ? map_name : "", description,
+                (name, new_description) -> {
             boolean keep_heights = edited || editor.isModified();
             MapFile.Resources current = currentResources();
             float[][] heights = editor.copyHeights();
@@ -1341,12 +1346,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             MapPreview preview = MapPreview.render(heights, settings, current);
             try {
                 new MapFile(name, settings, keep_heights ? heights : null, resources_edited ? current : null,
-                        preview).save(dir);
+                        preview, new_description).save(dir);
             } catch (IOException e) {
                 getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("save_failed", e.getMessage())));
                 return;
             }
             map_name = name;
+            description = new_description;
             edited = keep_heights;
             editor.markSaved();
             resources_modified = false;
@@ -1695,7 +1701,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 sync.changedAnywhere();
             sendEdits();
             return new MapFile(map_name != null ? map_name : "", settings, editor.copyHeights(), currentResources(),
-                    null).toBytes();
+                    null, description).toBytes();
         }
 
         @Override

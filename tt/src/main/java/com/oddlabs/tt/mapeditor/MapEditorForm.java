@@ -62,6 +62,7 @@ public final class MapEditorForm extends Form {
     private @NonNull MapSettings settings;
     // The saved map the settings came from, and its edited heights and resources if it has them.
     private @Nullable String map_name;
+    private @NonNull String description = "";
     private float @Nullable [] @Nullable [] heights;
     private MapFile.@Nullable Resources resources;
     private boolean applying;
@@ -256,6 +257,7 @@ public final class MapEditorForm extends Form {
             heights = null;
             resources = null;
             map_name = null;
+            description = "";
         }
         refresh();
     }
@@ -267,6 +269,7 @@ public final class MapEditorForm extends Form {
         heights = null;
         resources = null;
         map_name = null;
+        description = "";
         showSettings(parsed);
         return true;
     }
@@ -305,11 +308,13 @@ public final class MapEditorForm extends Form {
         Path dir = mapsDir();
         if (dir == null)
             return;
-        gui_root.addModalForm(new SaveMapDialog(gui_root, dir, map_name != null ? map_name : "", name -> {
+        gui_root.addModalForm(new SaveMapDialog(gui_root, dir, map_name != null ? map_name : "", description,
+                (name, new_description) -> {
             try {
                 MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources) : null;
-                new MapFile(name, settings, heights, resources, preview).save(dir);
+                new MapFile(name, settings, heights, resources, preview, new_description).save(dir);
                 map_name = name;
+                description = new_description;
                 refresh();
                 gui_root.getInfoPrinter().print(MapEditor.i18n("saved", name));
             } catch (IOException e) {
@@ -334,6 +339,7 @@ public final class MapEditorForm extends Form {
             heights = map.heights();
             resources = map.resources();
             map_name = map.name();
+            description = map.description();
             showSettings(map.settings());
         }));
     }
@@ -348,7 +354,8 @@ public final class MapEditorForm extends Form {
         if (chosen != null) {
             remove();
             MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources) : null;
-            chosen.accept(new MapFile(map_name != null ? map_name : "", settings, heights, resources, preview));
+            chosen.accept(new MapFile(map_name != null ? map_name : "", settings, heights, resources, preview,
+                    description));
             return;
         }
         button_start.setDisabled(true);
@@ -356,6 +363,6 @@ public final class MapEditorForm extends Form {
                 : new MapEditorLoader.SessionStart.Host(map_name != null ? map_name : MapEditor.i18n(
                         "session_default_name", EditorSession.localNick()));
         ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, settings, map_name,
-                heights, resources, session));
+                description, heights, resources, session));
     }
 }

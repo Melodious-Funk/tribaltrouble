@@ -16,6 +16,7 @@ import com.oddlabs.tt.gui.Label;
 import com.oddlabs.tt.gui.MultiColumnComboBox;
 import com.oddlabs.tt.gui.Row;
 import com.oddlabs.tt.gui.Skin;
+import com.oddlabs.tt.gui.TextBox;
 import com.oddlabs.tt.guievent.RowListener;
 import com.oddlabs.tt.input.GameAction;
 import com.oddlabs.tt.input.InputEvent;
@@ -65,7 +66,8 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_TOP;
 final class LoadMapDialog extends Form {
     private static final int BUTTON_WIDTH = 100;
     private static final int NAME_WIDTH = 230;
-    private static final int LIST_HEIGHT = 300;
+    // Tall enough for the preview, the map's size and terrain, and some of its description beside it.
+    private static final int LIST_HEIGHT = 380;
     private static final int PREVIEW_SIZE = 256;
     private static final String PARENT = "..";
     // Letters typed within this long of each other make one name to jump to.
@@ -126,6 +128,7 @@ final class LoadMapDialog extends Form {
     private final @NonNull MultiColumnComboBox<Item> list;
     private final @NonNull MapPreviewView preview;
     private final @NonNull Label label_info;
+    private final @NonNull TextBox box_description;
     private final @NonNull Label label_status;
     private final @NonNull String hint;
     private final @NonNull HorizButton button_back;
@@ -197,6 +200,8 @@ final class LoadMapDialog extends Form {
 
         preview = new MapPreviewView(PREVIEW_SIZE);
         label_info = new Label("", font, PREVIEW_SIZE);
+        box_description = new TextBox(PREVIEW_SIZE, LIST_HEIGHT - PREVIEW_SIZE - label_info.getHeight() - 2 * spacing,
+                font, MapFile.MAX_DESCRIPTION_LENGTH);
 
         // The folder box spans the list and the preview.
         int dir_width = list.getWidth() + spacing + PREVIEW_SIZE - label_dir.getWidth() - button_go.getWidth() - 2 * spacing;
@@ -239,6 +244,7 @@ final class LoadMapDialog extends Form {
         addChild(list);
         addChild(preview);
         addChild(label_info);
+        addChild(box_description);
         addChild(label_status);
         addChild(button_load);
         addChild(button_delete);
@@ -256,6 +262,7 @@ final class LoadMapDialog extends Form {
         list.place(button_back, BOTTOM_LEFT);
         preview.place(list, RIGHT_TOP);
         label_info.place(preview, BOTTOM_LEFT);
+        box_description.place(label_info, BOTTOM_LEFT, spacing);
         button_cancel.place(preview, BOTTOM_RIGHT, list.getHeight() - PREVIEW_SIZE + spacing);
         button_load.place(button_cancel, LEFT_MID);
         button_delete.place(button_load, LEFT_MID);
@@ -623,6 +630,7 @@ final class LoadMapDialog extends Form {
         if (entry == null) {
             preview.show(null, item != null ? MapEditor.i18n("folder_preview") : "");
             label_info.set("");
+            showDescription(box_description, null);
             return;
         }
         Optional<MapPreview> found = previews.computeIfAbsent(entry.path(), path -> {
@@ -636,6 +644,14 @@ final class LoadMapDialog extends Form {
         preview.show(found.orElse(null), MapEditor.i18n("no_preview"));
         label_info.set(MapEditor.i18n("map_info", ServerMessageBundler.getSizeString(entry.settings().size()),
                 ServerMessageBundler.getTerrainTypeString(entry.settings().terrain())));
+        showDescription(box_description, entry.description());
+    }
+
+    /** Shows a map's description in a box, scrolled to its start, or nothing when no map is shown. */
+    static void showDescription(@NonNull TextBox box, @Nullable String description) {
+        box.setText(description == null ? "" : description.isEmpty() ? MapEditor.i18n("no_description")
+                : description);
+        box.setOffsetY(0);
     }
 
     /** Opens a folder, or takes a map. */
