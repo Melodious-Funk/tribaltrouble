@@ -49,6 +49,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
@@ -65,12 +66,16 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
  * wheel sizes the brush, Shift plus the wheel sets its intensity, and the plain wheel zooms like in a game. The
  * middle button turns the view, as it does in a game.
  *
+ * <p>Rivers and ridges follow a course: each left click adds a point to it, and a right click or Enter lays the
+ * course, Backspace takes back its last point and Escape drops it. The copy brush copies the area dragged over, then
+ * pastes it at each left click; R turns the copy and M mirrors it, and a right click or Escape drops it.
+ *
  * <p>The map mode key (Space by default) flies up to the game's island overview. Another press of it flies back, and
  * a left click flies down to the clicked spot. Nothing else works while there.
  */
 final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHost, MapCameraOwner {
     private static final float MIN_RADIUS = 4f;
-    private static final float MAX_RADIUS = 96f;
+    private static final float MAX_RADIUS = 512f;
     private static final float RADIUS_STEP = 1.15f;
     private static final int MIN_INTENSITY = 0;
     /** Seconds between resource brush dabs while the button is held. */
@@ -94,6 +99,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final @NonNull PlantLayer plants;
     private final @NonNull Water water;
     private final @NonNull AccessOverlay access;
+    private final @NonNull EdgeOverlay edges;
     private final @NonNull Label label_access_legend;
     // Seconds since the playable area last followed a stroke in progress.
     private float access_timer;
@@ -117,6 +123,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final @NonNull Animated ticker = this::tick;
     private final @NonNull LandscapeLocation location = new LandscapeLocation();
     private final @NonNull Random random = new Random(LocalEventQueue.getQueue().getHighPrecisionManager().getTick());
+    // Fixed for the session, so painting cliffs over cliffs raises the same cells further.
+    private final int cliff_seed = random.nextInt();
 
     private final @NonNull EditorCamera game_camera;
     private final @NonNull Toolbar toolbar;
@@ -131,6 +139,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private @NonNull Brush brush = Brush.HEIGHT;
     private float radius = 16f;
     private int intensity = 50;
+    // Whether resource brushes spread in clumps rather than evenly.
+    private boolean natural_spread;
+
+    // The points of the river or ridge course clicked so far, in meters.
+    private final List<float @NonNull []> course = new ArrayList<>();
+    // What the copy brush last copied, which each left click pastes.
+    private @Nullable Clipboard clipboard;
 
     // The ground under the cursor, in meters.
     private boolean has_cursor;
@@ -142,6 +157,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // Ground height where the stroke began: the flatten target, and the level the cursor is held to while painting.
     private float stroke_z;
     private int random_seed;
+    // Where a drag began, in meters.
     private float ramp_x;
     private float ramp_y;
 
@@ -217,6 +233,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         toolbar.addChild(group_resource);
         group_terrain.place();
         group_resource.place(group_terrain, RIGHT_MID, 20);
+        CheckBox check_natural = new CheckBox(natural_spread, MapEditor.i18n("natural_spread"));
+        check_natural.addCheckBoxListener(marked -> {
+            natural_spread = marked;
+            setFocus();
+        });
         label_radius = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
         label_intensity = new Label("", Skin.getSkin().getEditFont(), LABEL_WIDTH);
         CheckBox check_trees = new CheckBox(view.draw_trees, MapEditor.i18n("show_trees"));
@@ -235,6 +256,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             placeAccessLegend();
             setFocus();
         });
+        edges = new EdgeOverlay(editor, world.getHeightMap().getSeaLevelMeters());
+        CheckBox check_edges = new CheckBox(false, MapEditor.i18n("show_edges"));
+        check_edges.addCheckBoxListener(marked -> {
+            edges.setVisible(marked);
+            setFocus();
+        });
         CheckBox check_wireframe = new CheckBox(view.line_mode, MapEditor.i18n("wireframe"));
         check_wireframe.addCheckBoxListener(marked -> {
             view.line_mode = marked;
@@ -247,27 +274,36 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         });
         HorizButton button_menu = new HorizButton(MapEditor.i18n("menu"), 80);
         button_menu.addMouseClickListener((_, _, _, _) -> openMenu());
-        label_hint = new Label("", Skin.getSkin().getEditFont(), HINT_WIDTH);
+        // Wide enough for the longest hint, as a label clips what does not fit.
+        int hint_width = Math.max(HINT_WIDTH, Skin.getSkin().getEditFont().getWidth(MapEditor.i18n("hint_paste")));
+        for (Brush b : Brush.values())
+            hint_width = Math.max(hint_width, Skin.getSkin().getEditFont().getWidth(b.getHint()));
+        label_hint = new Label("", Skin.getSkin().getEditFont(), hint_width + 10);
         Label label_controls = new Label(MapEditor.i18n("hint_controls"), Skin.getSkin().getEditFont(),
-                HINT_WIDTH);
+                hint_width + 10);
+        toolbar.addChild(check_natural);
         toolbar.addChild(label_radius);
         toolbar.addChild(label_intensity);
         toolbar.addChild(check_trees);
         toolbar.addChild(check_wireframe);
         toolbar.addChild(check_access);
+        toolbar.addChild(check_edges);
         toolbar.addChild(button_undo);
         toolbar.addChild(button_menu);
         toolbar.addChild(label_hint);
         toolbar.addChild(label_controls);
-        label_radius.place(group_resource, RIGHT_MID, 20);
+        // The brushes and their settings along the top, what to show beside the hint below.
+        check_natural.place(group_resource, RIGHT_MID);
+        label_radius.place(check_natural, RIGHT_MID, 20);
         label_intensity.place(label_radius, RIGHT_MID);
-        check_trees.place(label_intensity, RIGHT_MID);
-        check_wireframe.place(check_trees, RIGHT_MID);
-        check_access.place(check_wireframe, RIGHT_MID);
-        button_undo.place(check_access, RIGHT_MID, 20);
+        button_undo.place(label_intensity, RIGHT_MID, 20);
         button_menu.place(button_undo, RIGHT_MID);
         label_hint.place(group_terrain, BOTTOM_LEFT);
         label_controls.place(label_hint, BOTTOM_LEFT);
+        check_trees.place(label_hint, RIGHT_MID);
+        check_wireframe.place(check_trees, RIGHT_MID);
+        check_access.place(check_wireframe, RIGHT_MID);
+        check_edges.place(check_access, RIGHT_MID);
         toolbar.compileCanvas();
         addChild(toolbar);
 
@@ -311,6 +347,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
      * keeps what it changed in the heights.
      */
     private record TerrainStep(ResourceLayer.@NonNull Stroke pruned) {
+    }
+
+    /**
+     * A paste in the undo history: the resources it cleared from its area and placed, and its heights, if it changed
+     * any, as a terrain step.
+     */
+    private record PasteStep(@Nullable TerrainStep terrain, ResourceLayer.@NonNull Stroke resources) {
     }
 
     /** The toolbar looks like a window but Escape on it opens the editor menu instead of closing it. */
@@ -427,6 +470,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     private void selectBrush(@NonNull Brush new_brush) {
         cancelStroke();
+        // A course clicked out for a river can be raised as a ridge instead, but no other brush uses it.
+        if (!new_brush.isCourse())
+            course.clear();
         brush = new_brush;
         refreshLabels();
     }
@@ -437,11 +483,28 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         label_intensity.clear();
         label_intensity.append(MapEditor.i18n("intensity", intensity));
         label_hint.clear();
-        label_hint.append(brush.getHint());
+        label_hint.append(brush == Brush.COPY && clipboard != null ? MapEditor.i18n("hint_paste") : brush.getHint());
     }
 
     private void beginStroke(int sign) {
-        if (stroke_sign != 0 || !has_cursor)
+        if (stroke_sign != 0)
+            return;
+        if (brush.isCourse()) {
+            if (sign > 0)
+                addCoursePoint();
+            else
+                layCourse();
+            return;
+        }
+        if (brush == Brush.COPY && clipboard != null) {
+            if (sign > 0)
+                paste(isShiftDown());
+            else
+                dropClipboard();
+            return;
+        }
+        // The copy brush's area is dragged out with the left button only.
+        if (!has_cursor || (brush == Brush.COPY && sign < 0))
             return;
         stroke_sign = sign;
         if (brush.isDragShape()) {
@@ -512,21 +575,24 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
      */
     private void updateAccess(float t) {
         access_timer += t;
-        if (access_map.isStale() && (stroke_sign == 0 || access_timer >= ACCESS_UPDATE_INTERVAL)) {
-            access_timer = 0f;
-            access_map.compute();
-            access.mapChanged();
-            // The ground under them changed, so plants and the sea's open water follow the sort too.
-            plants.update();
-            water.updateOceanPatches();
-            // Units could no longer reach them. Undoing the edit brings them back.
-            if (layer.prune(pruned != null ? pruned : new ResourceLayer.Stroke())) {
-                resources_edited = true;
-                resources_modified = true;
-                ground_settle = true;
-            }
-        }
+        if (access_map.isStale() && (stroke_sign == 0 || access_timer >= ACCESS_UPDATE_INTERVAL))
+            sortAccess();
         access.update(Renderer.getRenderer().getRenderContext());
+    }
+
+    private void sortAccess() {
+        access_timer = 0f;
+        access_map.compute();
+        access.mapChanged();
+        // The ground under them changed, so plants and the sea's open water follow the sort too.
+        plants.update();
+        water.updateOceanPatches();
+        // Units could no longer reach them. Undoing the edit brings them back.
+        if (layer.prune(pruned != null ? pruned : new ResourceLayer.Stroke())) {
+            resources_edited = true;
+            resources_modified = true;
+            ground_settle = true;
+        }
     }
 
     private void endStroke() {
@@ -536,20 +602,133 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (brush.isResourceBrush()) {
             finishResourceStroke();
         } else if (brush.isDragShape()) {
-            if (has_cursor) {
-                float ax = toGrid(ramp_x);
-                float ay = toGrid(ramp_y);
-                float bx = toGrid(cursor_x);
-                float by = toGrid(cursor_y);
-                beginTerrainStroke();
-                editor.applyRamp(ax, ay, editor.getHeight(ax, ay), bx, by, editor.getHeight(bx, by), toGrid(radius),
-                        intensity / 100f, stroke_sign);
-                finishTerrainStroke();
-            }
+            if (has_cursor)
+                layDrag();
         } else {
             finishTerrainStroke();
         }
         stroke_sign = 0;
+    }
+
+    /** Lays a ramp or an isthmus, or copies an area, from where the drag began to the cursor. */
+    private void layDrag() {
+        float ax = toGrid(ramp_x);
+        float ay = toGrid(ramp_y);
+        float bx = toGrid(cursor_x);
+        float by = toGrid(cursor_y);
+        if (brush == Brush.COPY) {
+            copy(ax, ay, bx, by);
+            return;
+        }
+        beginTerrainStroke();
+        if (brush == Brush.ISTHMUS)
+            editor.applyIsthmus(ax, ay, bx, by, toGrid(radius), intensity / 100f, stroke_sign, random.nextInt());
+        else
+            editor.applyRamp(ax, ay, editor.getHeight(ax, ay), bx, by, editor.getHeight(bx, by), toGrid(radius),
+                    intensity / 100f, stroke_sign);
+        finishTerrainStroke();
+    }
+
+    // ---- Courses ----
+
+    private void addCoursePoint() {
+        if (has_cursor)
+            course.add(new float[]{cursor_x, cursor_y});
+    }
+
+    private void removeCoursePoint() {
+        if (!course.isEmpty())
+            course.removeLast();
+    }
+
+    /** Digs the river or raises the ridge along the course clicked out, and starts a new one. */
+    private void layCourse() {
+        if (course.isEmpty()) {
+            getGUIRoot().getInfoPrinter().print(MapEditor.i18n("no_course"));
+            return;
+        }
+        List<float[]> points = new ArrayList<>(course.size());
+        for (float[] point : course)
+            points.add(new float[]{toGrid(point[0]), toGrid(point[1])});
+        BrushPath path = new BrushPath(points);
+        beginTerrainStroke();
+        if (brush == Brush.RIVER)
+            editor.applyRiver(path, toGrid(radius), intensity / 100f, random.nextInt());
+        else
+            editor.applyRidge(path, toGrid(radius), intensity / 100f, random.nextInt());
+        finishTerrainStroke();
+        ground_settle = true;
+        course.clear();
+    }
+
+    // ---- Copy and paste ----
+
+    /** Copies the heights and resources of the rectangle with corners at two grid positions. */
+    private void copy(float ax, float ay, float bx, float by) {
+        int last = editor.getSize() - 1;
+        int x0 = Math.clamp(Math.round(Math.min(ax, bx)), 0, last);
+        int y0 = Math.clamp(Math.round(Math.min(ay, by)), 0, last);
+        int x1 = Math.clamp(Math.round(Math.max(ax, bx)), 0, last);
+        int y1 = Math.clamp(Math.round(Math.max(ay, by)), 0, last);
+        if (x1 - x0 < 1 || y1 - y0 < 1)
+            return;
+        clipboard = new Clipboard(editor.copyRect(x0, y0, x1, y1), layer.copyRect(x0, y0, x1, y1));
+        refreshLabels();
+        getGUIRoot().getInfoPrinter().print(MapEditor.i18n("copied", (x1 - x0 + 1) * HeightMap.METERS_PER_UNIT_GRID,
+                (y1 - y0 + 1) * HeightMap.METERS_PER_UNIT_GRID));
+    }
+
+    /** The first cell the copy lands on when pasted, which puts its middle under the cursor. */
+    private int pasteX(@NonNull Clipboard copy) {
+        return Math.round(toGrid(cursor_x) - (copy.width() - 1) / 2f);
+    }
+
+    private int pasteY(@NonNull Clipboard copy) {
+        return Math.round(toGrid(cursor_y) - (copy.height() - 1) / 2f);
+    }
+
+    /**
+     * Pastes the copy under the cursor: its heights, then, once the playable area is sorted for them, its trees, rock
+     * and iron in place of those that were there. It is undone as one step.
+     *
+     * @param keep_heights whether to keep the heights as copied, rather than meet the ground it lands on
+     */
+    private void paste(boolean keep_heights) {
+        Clipboard copy = clipboard;
+        if (copy == null || !has_cursor)
+            return;
+        int x0 = pasteX(copy);
+        int y0 = pasteY(copy);
+        beginTerrainStroke();
+        ResourceLayer.Stroke terrain_pruned = pruned;
+        editor.paste(copy.heights(), x0, y0, intensity / 100f, keep_heights);
+        // Resources only go on playable ground, so the heights must reach it, and the sort follow, before they do.
+        editor.flush();
+        if (access_map.isStale())
+            sortAccess();
+        ResourceLayer.Stroke placed = new ResourceLayer.Stroke();
+        layer.paste(copy.resources(), x0, y0, copy.width(), copy.height(), placed);
+        boolean heights_changed = editor.endStroke();
+        if (!heights_changed)
+            pruned = null;
+        if (heights_changed || !placed.isEmpty()) {
+            remember(new PasteStep(heights_changed && terrain_pruned != null ? new TerrainStep(terrain_pruned) : null,
+                    placed));
+            resources_edited = true;
+            resources_modified = true;
+        }
+        ground_settle = true;
+    }
+
+    private void dropClipboard() {
+        clipboard = null;
+        refreshLabels();
+    }
+
+    private void turnClipboard(boolean mirror) {
+        Clipboard copy = clipboard;
+        if (copy != null)
+            clipboard = mirror ? copy.mirrored() : copy.rotated();
     }
 
     /** Drops a stroke without laying a pending ramp, keeping whatever was already painted as one undo step. */
@@ -574,7 +753,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             resource_timer = 0f;
             // Right click takes away what the brush paints; the eraser takes away everything with either button.
             if (resource != null && stroke_sign > 0)
-                layer.paint(resource, cursor_x, cursor_y, radius, intensity / 100f, resource_stroke);
+                layer.paint(resource, cursor_x, cursor_y, radius, intensity / 100f, natural_spread, resource_stroke);
             else
                 layer.erase(resource, cursor_x, cursor_y, radius, resource_stroke);
             return;
@@ -588,6 +767,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             case FLATTEN -> editor.applyFlatten(gx, gy, r, strength, stroke_sign, t, stroke_z);
             case SMOOTH -> editor.applySmooth(gx, gy, r, strength, stroke_sign, t);
             case RANDOM -> editor.applyRandom(gx, gy, r, strength, stroke_sign, t, random_seed);
+            case ROUGHNESS -> editor.applyRoughness(gx, gy, r, strength, stroke_sign, t, random_seed);
+            case CLIFFS -> editor.applyCliffs(gx, gy, r, strength, stroke_sign, t, cliff_seed);
+            case ERODE -> editor.applyErode(gx, gy, r, strength, stroke_sign, t);
+            case WARP -> editor.applyWarp(gx, gy, r, strength, stroke_sign, t, random_seed);
+            case BEACH -> editor.applyBeach(gx, gy, r, strength, stroke_sign, t);
             default -> {
             }
         }
@@ -601,18 +785,34 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (step instanceof ResourceLayer.Stroke stroke) {
             layer.undo(stroke);
             resources_modified = true;
-        } else if (step instanceof TerrainStep terrain && editor.undo()) {
-            // Their cells rejoin the playable area with the heights, so they are not pruned again.
-            if (!terrain.pruned().isEmpty()) {
-                layer.undo(terrain.pruned());
-                resources_modified = true;
-            }
+        } else if (step instanceof TerrainStep terrain) {
+            undoTerrain(terrain);
+        } else if (step instanceof PasteStep paste) {
+            // What it placed goes first, so what it cleared comes back on the ground it stood on.
+            layer.undo(paste.resources());
+            resources_modified = true;
+            if (paste.terrain() != null)
+                undoTerrain(paste.terrain());
         } else {
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("nothing_to_undo"));
         }
     }
 
+    private void undoTerrain(@NonNull TerrainStep terrain) {
+        // Their cells rejoin the playable area with the heights, so they are not pruned again.
+        if (editor.undo() && !terrain.pruned().isEmpty()) {
+            layer.undo(terrain.pruned());
+            resources_modified = true;
+        }
+    }
+
     // ---- Mouse and keys ----
+
+    /** The per key state, since on some platforms the modifier flags stay set after the key is let go. */
+    private static boolean isShiftDown() {
+        var input = Renderer.getLocalInput();
+        return input.isKeyDown(Key.LSHIFT) || input.isKeyDown(Key.RSHIFT);
+    }
 
     private boolean isOverToolbar(int x, int y) {
         return x >= toolbar.getX() && x < toolbar.getX() + toolbar.getWidth() && y >= toolbar.getY()
@@ -675,7 +875,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (input.isKeyDown(Key.LCONTROL) || input.isKeyDown(Key.RCONTROL)) {
             radius = Math.clamp(steps > 0 ? radius * RADIUS_STEP : radius / RADIUS_STEP, MIN_RADIUS, MAX_RADIUS);
             refreshLabels();
-        } else if (input.isKeyDown(Key.LSHIFT) || input.isKeyDown(Key.RSHIFT)) {
+        } else if (isShiftDown()) {
             intensity = Math.clamp(intensity + steps * INTENSITY_STEP, MIN_INTENSITY, MAX_INTENSITY);
             refreshLabels();
         } else {
@@ -708,6 +908,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 event.consume();
                 return;
             }
+            if (handleBrushKey(event)) {
+                event.consume();
+                return;
+            }
             if (event.consumeAction(GameAction.GLOBAL_MENU) || event.consumeAction(GameAction.UI_CANCEL)) {
                 openMenu();
                 event.consume();
@@ -717,21 +921,83 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         super.handleInput(event);
     }
 
+    /**
+     * The keys of a course or a copy: Enter, Backspace and Escape for a course, R, M and Escape for a copy.
+     *
+     * @return whether the key was taken
+     */
+    private boolean handleBrushKey(@NonNull InputEvent event) {
+        Key key = event.getKeyCode();
+        if (key == null || event.isControlDown() || event.isAltDown())
+            return false;
+        if (brush.isCourse()) {
+            switch (key) {
+                case RETURN -> layCourse();
+                case BACK -> removeCoursePoint();
+                case ESCAPE -> {
+                    if (course.isEmpty())
+                        return false;
+                    course.clear();
+                }
+                default -> {
+                    return false;
+                }
+            }
+            event.consumeAction(GameAction.UI_CANCEL);
+            event.consumeAction(GameAction.GLOBAL_MENU);
+            return true;
+        }
+        if (brush == Brush.COPY && clipboard != null) {
+            switch (key) {
+                case R -> turnClipboard(false);
+                case M -> turnClipboard(true);
+                case ESCAPE -> dropClipboard();
+                default -> {
+                    return false;
+                }
+            }
+            event.consumeAction(GameAction.UI_CANCEL);
+            event.consumeAction(GameAction.GLOBAL_MENU);
+            return true;
+        }
+        return false;
+    }
+
     // ---- Brush outline ----
 
     @Override
     public void render3D(@NonNull LandscapeRenderer renderer, @NonNull RenderQueues render_queues,
             @NonNull CameraState state, @NonNull MatrixStack model_view, @NonNull MatrixStack projection) {
         access.render(Renderer.getRenderer().getRenderContext(), renderer, state);
-        if (!has_cursor || map_mode || getGUIRoot().getModalDelegate() != null)
+        edges.render(Renderer.getRenderer().getRenderContext(), state);
+        if (map_mode || getGUIRoot().getModalDelegate() != null)
             return;
         // The water reflection is drawn from a camera mirrored below the sea; the brush has no place in it.
         if (state.getCurrentZ() < world.getHeightMap().getSeaLevelMeters())
+            return;
+        if (!has_cursor && course.isEmpty())
             return;
         try (BrushRenderer.Batch batch = brush_renderer.begin(renderer, model_view, projection)) {
             float r = stroke_sign < 0 ? 1f : .4f;
             float g = stroke_sign < 0 ? .4f : 1f;
             float b = stroke_sign == 0 ? 1f : .4f;
+            if (brush.isCourse())
+                drawCourse(batch, r, g, b);
+            if (!has_cursor)
+                return;
+            Clipboard copy = clipboard;
+            if (brush == Brush.COPY) {
+                if (copy != null) {
+                    // Where the copy will land.
+                    float m = HeightMap.METERS_PER_UNIT_GRID;
+                    batch.rectangle(pasteX(copy) * m, pasteY(copy) * m, (pasteX(copy) + copy.width() - 1) * m,
+                            (pasteY(copy) + copy.height() - 1) * m, r, g, b, .9f);
+                } else if (stroke_sign != 0) {
+                    batch.rectangle(ramp_x, ramp_y, cursor_x, cursor_y, r, g, b, .9f);
+                }
+                batch.dot(cursor_x, cursor_y, r, g, b, .9f);
+                return;
+            }
             batch.circle(cursor_x, cursor_y, radius, r, g, b, .9f);
             batch.dot(cursor_x, cursor_y, r, g, b, .9f);
             if (brush.isDragShape() && stroke_sign != 0) {
@@ -739,6 +1005,23 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 batch.line(ramp_x, ramp_y, cursor_x, cursor_y, r, g, b, .9f);
             }
         }
+    }
+
+    /** The course clicked so far, and on to the cursor as its next point would take it. */
+    private void drawCourse(BrushRenderer.@NonNull Batch batch, float r, float g, float b) {
+        List<float[]> points = new ArrayList<>(course.size() + 1);
+        for (float[] point : course) {
+            batch.circle(point[0], point[1], 1.5f, r, g, b, .9f);
+            points.add(new float[]{toGrid(point[0]), toGrid(point[1])});
+        }
+        if (has_cursor)
+            points.add(new float[]{toGrid(cursor_x), toGrid(cursor_y)});
+        if (points.size() < 2)
+            return;
+        float[] curve = new BrushPath(points).curve();
+        float m = HeightMap.METERS_PER_UNIT_GRID;
+        for (int i = 2; i < curve.length; i += 2)
+            batch.line(curve[i - 2] * m, curve[i - 1] * m, curve[i] * m, curve[i + 1] * m, r, g, b, .9f);
     }
 
     // ---- Menu, saving and leaving ----
@@ -818,6 +1101,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (ground != null)
             ground.close();
         access.close();
+        edges.close();
         Renderer.startMenu(network, getGUIRoot().getGUI());
     }
 

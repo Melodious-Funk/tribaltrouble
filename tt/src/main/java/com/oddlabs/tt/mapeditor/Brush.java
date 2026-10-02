@@ -9,8 +9,18 @@ enum Brush {
     HEIGHT("brush_height", "hint_height", null),
     FLATTEN("brush_flatten", "hint_flatten", null),
     SMOOTH("brush_smooth", "hint_smooth", null),
+    ROUGHNESS("brush_roughness", "hint_roughness", null),
     RANDOM("brush_random", "hint_random", null),
     RAMP("brush_ramp", "hint_ramp", null),
+    ISTHMUS("brush_isthmus", "hint_isthmus", null),
+    RIVER("brush_river", "hint_river", null),
+    MOUNTAIN("brush_mountain", "hint_mountain", null),
+    CLIFFS("brush_cliffs", "hint_cliffs", null),
+    ERODE("brush_erode", "hint_erode", null),
+    WARP("brush_warp", "hint_warp", null),
+    BEACH("brush_beach", "hint_beach", null),
+    /** Copies an area dragged over, then pastes it wherever clicked. */
+    COPY("brush_copy", "hint_copy", null),
     TREES("brush_trees", "hint_trees", Resource.TREE),
     PALMS("brush_palms", "hint_trees", Resource.PALM),
     ROCK("brush_rock", "hint_rock", Resource.ROCK),
@@ -39,9 +49,17 @@ enum Brush {
         return MapEditor.i18n(hint_key);
     }
 
-    /** Ramps are laid in one go when the drag ends; every other brush paints while the button is held. */
+    /**
+     * Ramps and isthmuses are laid in one go when the drag ends, and the area to copy is picked by dragging over it.
+     * Brushes that are neither a drag nor a course paint while the button is held.
+     */
     boolean isDragShape() {
-        return this == RAMP;
+        return this == RAMP || this == ISTHMUS || this == COPY;
+    }
+
+    /** Rivers and ridges follow a course clicked out a point at a time, and are laid when it is done. */
+    boolean isCourse() {
+        return this == RIVER || this == MOUNTAIN;
     }
 
     /** Whether this brush works on resources rather than on the terrain. */

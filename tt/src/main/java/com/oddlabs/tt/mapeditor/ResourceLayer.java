@@ -43,6 +43,12 @@ final class ResourceLayer {
      * spacing rule packs them, so spreading them further as density drops keeps the count in step with density.
      */
     private static final float FULL_DENSITY_SPACING = 2.8f;
+    /** Cells across the clumps and clearings of a natural spread. */
+    private static final float CLUMP_FEATURE = 12f;
+    /** The most cells a natural spread keeps between resources of one kind, however thin. */
+    private static final float MAX_NATURAL_SPACING = 12f;
+    /** Fixed, so painting the same ground again fills in the same spread rather than a new one. */
+    private static final int NATURAL_SEED = 0x5eed;
 
     /** What one stroke placed and removed, to take it back. */
     static final class Stroke {
@@ -159,14 +165,24 @@ final class ResourceLayer {
     /**
      * Places resources of a kind under a brush, up to the given density (0 to 1).
      *
+     * <p>A natural spread gathers them into clumps with clearings between, the way the generator's noise maps do,
+     * keeps them uneven distances apart and leaves some cells out, so no rows line up. It is the same spread each
+     * time for the same ground, so painting over it again fills it in rather than piling more on.
+     *
      * @param cx brush centre in meters
      * @param radius brush radius in meters
      */
-    void paint(@NonNull Resource kind, float cx, float cy, float radius, float density, @NonNull Stroke stroke) {
+    void paint(@NonNull Resource kind, float cx, float cy, float radius, float density, boolean natural,
+            @NonNull Stroke stroke) {
         int center_x = Math.round(cx / HeightMap.METERS_PER_UNIT_GRID);
         int center_y = Math.round(cy / HeightMap.METERS_PER_UNIT_GRID);
         int r = Math.max(0, Math.round(radius / HeightMap.METERS_PER_UNIT_GRID));
         int[] cells = diskCells(r);
+        if (natural && density > 0f) {
+            paintNatural(kind, center_x, center_y, cells, density, stroke);
+            finish();
+            return;
+        }
         // Below this density no two fit in the disk, which leaves just the one nearest the centre.
         float spacing = density <= 0f ? Float.POSITIVE_INFINITY : FULL_DENSITY_SPACING / (float) Math.sqrt(density);
         if (spacing > 2 * r) {
@@ -185,6 +201,72 @@ final class ResourceLayer {
             changed(x, y);
             if (reach == 0)
                 break;
+        }
+        finish();
+    }
+
+    private void paintNatural(@NonNull Resource kind, int center_x, int center_y, int @NonNull [] cells,
+            float density, @NonNull Stroke stroke) {
+        int seed = NATURAL_SEED + kind.ordinal() * 101;
+        for (int i = 0; i < cells.length; i += 2) {
+            int x = center_x + cells[i];
+            int y = center_y + cells[i + 1];
+            if (!inside(x, y))
+                continue;
+            float clump = Math.clamp((Noise.fractal(x, y, CLUMP_FEATURE, 3, seed) - .35f) / .3f, 0f, 1f);
+            float local = density * clump;
+            // Some cells are passed over, more of them where it is sparse, so nothing lines up.
+            if (local < .02f || Noise.hash(x, y, seed + 7) > .35f + .65f * clump)
+                continue;
+            float spacing = Math.min(MAX_NATURAL_SPACING, FULL_DENSITY_SPACING / (float) Math.sqrt(local)
+                    * (.75f + .6f * Noise.hash(x, y, seed + 3)));
+            if (!canPlace(x, y) || kindWithin(kind, x, y, spacing, (int) Math.ceil(spacing)))
+                continue;
+            place(kind, x, y);
+            stroke.added.add(new int[]{kind.ordinal(), x, y});
+            changed(x, y);
+        }
+    }
+
+    /** The resources in a rectangle of cells (inclusive), as their ordinal and their cell counted from (x0, y0). */
+    @NonNull List<int @NonNull []> copyRect(int x0, int y0, int x1, int y1) {
+        List<int[]> copied = new ArrayList<>();
+        for (int y = Math.max(0, y0); y <= Math.min(size - 1, y1); y++) {
+            for (int x = Math.max(0, x0); x <= Math.min(size - 1, x1); x++) {
+                Resource found = kinds[y * size + x];
+                if (found != null)
+                    copied.add(new int[]{found.ordinal(), x - x0, y - y0});
+            }
+        }
+        return copied;
+    }
+
+    /**
+     * Clears a w by h rectangle of cells from (x0, y0) and places copied resources in it, where they fit as painted
+     * ones would. The heights under them should be pasted, and the playable area sorted again, first.
+     *
+     * @param resources ordinals and cells counted from (x0, y0), as {@link #copyRect} gives them
+     */
+    void paste(@NonNull List<int @NonNull []> resources, int x0, int y0, int w, int h, @NonNull Stroke stroke) {
+        for (int y = Math.max(0, y0); y <= Math.min(size - 1, y0 + h - 1); y++) {
+            for (int x = Math.max(0, x0); x <= Math.min(size - 1, x0 + w - 1); x++) {
+                Resource found = kinds[y * size + x];
+                if (found != null) {
+                    remove(x, y);
+                    stroke.removed.add(new int[]{found.ordinal(), x, y});
+                    changed(x, y);
+                }
+            }
+        }
+        for (int[] copied : resources) {
+            int x = x0 + copied[1];
+            int y = y0 + copied[2];
+            if (!canPlace(x, y))
+                continue;
+            Resource kind = Resource.values()[copied[0]];
+            place(kind, x, y);
+            stroke.added.add(new int[]{kind.ordinal(), x, y});
+            changed(x, y);
         }
         finish();
     }

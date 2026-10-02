@@ -21,7 +21,8 @@ final class BrushRenderer {
     private static final float DOT_SPACING = 1.5f;
     private static final float DOT_SIZE = 1.6f;
     private static final int MIN_DOTS = 24;
-    private static final int MAX_DOTS = 360;
+    // Enough for a full brush ring at the largest radius without gaps between the dots.
+    private static final int MAX_DOTS = 2400;
 
     private final DecalRenderer decal_renderer = new DecalRenderer();
     private final @NonNull Texture dot;
@@ -71,6 +72,14 @@ final class BrushRenderer {
                 float t = i / (float) count;
                 dot(x0 + dx * t, y0 + dy * t, r, g, b, a);
             }
+        }
+
+        /** The outline of a rectangle with corners at two points, in meters. */
+        void rectangle(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
+            line(x0, y0, x1, y0, r, g, b, a);
+            line(x1, y0, x1, y1, r, g, b, a);
+            line(x1, y1, x0, y1, r, g, b, a);
+            line(x0, y1, x0, y0, r, g, b, a);
         }
 
         void dot(float x, float y, float r, float g, float b, float a) {

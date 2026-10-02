@@ -97,7 +97,7 @@ final class MapEditorLoader implements LoadCallback {
         ResourceSnapper snapper = new ResourceSnapper(world);
         AccessMap access_map = new AccessMap(terrain, settings);
         AccessOverlay access = new AccessOverlay(access_map);
-        TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, (x0, y0, x1, y1) -> {
+        TerrainEditor editor = new TerrainEditor(world.getHeightMap(), terrain, settings, (x0, y0, x1, y1) -> {
             snapper.snap(x0, y0, x1, y1);
             if (ground != null)
                 ground.heightsChanged(x0, y0, x1, y1);
