@@ -6,6 +6,7 @@ import com.oddlabs.tt.event.LocalEventQueue;
 import com.oddlabs.tt.form.MessageForm;
 import com.oddlabs.tt.form.ProgressForm;
 import com.oddlabs.tt.gui.CancelButton;
+import com.oddlabs.tt.gui.CheckBox;
 import com.oddlabs.tt.gui.FocusDirection;
 import com.oddlabs.tt.gui.Form;
 import com.oddlabs.tt.gui.GUIObject;
@@ -38,7 +39,8 @@ import static com.oddlabs.tt.gui.Placement.TOP_MID;
 
 /**
  * The map editor's start window: pick the island to start from, by options or map code, or open a saved map. Opened
- * from the multiplayer menu, it hosts a shared session on the island instead of editing it alone.
+ * from the multiplayer menu, it hosts a shared session on the island instead of editing it alone: a map session, or a
+ * campaign session whose first level the island is, or one on a saved campaign.
  */
 public final class MapEditorForm extends Form {
     private static final int SLIDER_LENGTH = 250;
@@ -56,6 +58,8 @@ public final class MapEditorForm extends Form {
     private final @NonNull Label label_mapcode;
     private final @NonNull Label label_map;
     private final @NonNull HorizButton button_start;
+    // Whether hosting opens a campaign session, when hosting.
+    private final @Nullable CheckBox check_campaign;
     // Where to go back to when hosting from the multiplayer menu, and null when editing alone.
     private final @Nullable Runnable back;
 
@@ -152,6 +156,24 @@ public final class MapEditorForm extends Form {
         label_map = new Label("", Skin.getSkin().getEditFont(), 500);
         addChild(label_map);
 
+        // Hosting: a map or a campaign session, or a campaign session on a saved campaign.
+        Group group_campaign = null;
+        if (back != null) {
+            CheckBox campaign_box = new CheckBox(false, CampaignEditor.i18n("session_campaign"));
+            HorizButton button_campaign = new HorizButton(CampaignEditor.i18n("session_host_saved"), 220);
+            button_campaign.addMouseClickListener((_, _, _, _) -> hostSavedCampaign());
+            group_campaign = new Group();
+            group_campaign.addChild(campaign_box);
+            group_campaign.addChild(button_campaign);
+            campaign_box.place();
+            button_campaign.place(campaign_box, RIGHT_MID, 20);
+            group_campaign.compileCanvas();
+            addChild(group_campaign);
+            check_campaign = campaign_box;
+        } else {
+            check_campaign = null;
+        }
+
         // Buttons: save and load sit to the left of start and cancel.
         Group group_buttons = new Group();
         HorizButton button_mapcode = new HorizButton(MapEditor.terrainI18n("enter_map_code"), 170);
@@ -186,6 +208,8 @@ public final class MapEditorForm extends Form {
         group_sliders.place(group_terrain, BOTTOM_RIGHT, section);
         group_code.place(group_sliders, BOTTOM_LEFT, section);
         label_map.place(group_code, BOTTOM_LEFT);
+        if (group_campaign != null)
+            group_campaign.place(label_map, BOTTOM_LEFT, section);
         group_buttons.place(Origin.AT_END);
         compileCanvas();
         if (chosen != null)
@@ -344,6 +368,30 @@ public final class MapEditorForm extends Form {
         }));
     }
 
+    /** Hosts a campaign session on a saved campaign, on its first level. */
+    private void hostSavedCampaign() {
+        Path dir = CampaignEditor.getCampaignsDir();
+        if (dir == null) {
+            gui_root.addModalForm(new MessageForm(MapEditor.i18n("no_maps_dir")));
+            return;
+        }
+        gui_root.addModalForm(new LoadCampaignDialog(gui_root, dir, path -> {
+            CampaignSession campaign;
+            try {
+                campaign = CampaignSession.open(path);
+                if (campaign.file.levels.isEmpty())
+                    throw new IOException(CampaignEditor.i18n("no_levels"));
+            } catch (IOException e) {
+                gui_root.addModalForm(new MessageForm(CampaignEditor.i18n("campaign_load_failed",
+                        path.getFileName().toString(), String.valueOf(e.getMessage()))));
+                return;
+            }
+            button_start.setDisabled(true);
+            ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, campaign,
+                    new MapEditorLoader.SessionStart.Host(campaign.file.name)));
+        }));
+    }
+
     @Override
     protected void doCancel() {
         if (back != null)
@@ -359,6 +407,15 @@ public final class MapEditorForm extends Form {
             return;
         }
         button_start.setDisabled(true);
+        if (check_campaign != null && check_campaign.isMarked()) {
+            // A new campaign, with the island as its first level.
+            CampaignSession campaign = CampaignSession.startingWith(new MapFile(map_name != null ? map_name : "",
+                    settings, heights, resources, null, description));
+            ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, campaign,
+                    new MapEditorLoader.SessionStart.Host(CampaignEditor.i18n("session_default_name",
+                            EditorSession.localNick()))));
+            return;
+        }
         MapEditorLoader.SessionStart session = back == null ? new MapEditorLoader.SessionStart.None()
                 : new MapEditorLoader.SessionStart.Host(map_name != null ? map_name : MapEditor.i18n(
                         "session_default_name", EditorSession.localNick()));

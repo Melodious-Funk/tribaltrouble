@@ -49,6 +49,32 @@ anything else, saying why on the hint line.
 The **Esc menu** has **Save campaign**, **Test this level** (plays it at the difficulty you pick and comes back
 to the editor afterwards), **Back to campaign levels** and **Exit**.
 
+## Editing together
+
+A campaign can be edited with other players, like a map in a shared map editing session. Everyone needs a
+multiplayer profile.
+
+- **Host:** in the campaign editor, **Esc menu → Edit together** shares the campaign you are editing. From the
+  multiplayer menu's **Map Editing** tab, **Host session...** opens the island picker: tick **Campaign session** to
+  start a new campaign on the island, or press **Host a saved campaign...** to share one you saved.
+- **Join:** campaign sessions show as *Campaign* in the **Kind** column of the **Map Editing** tab. Joining hands
+  you the whole campaign, opened on the level being edited.
+
+Everyone edits the same level. Terrain, resources, units, buildings, areas, triggers, the players' setup and the level's
+texts reach the others a few times a second. Each player's new objects, areas and triggers get ids of their own, so
+triggers never mix them up. Undo takes back your own edits only. If a window like **Players...** or **Level...** is
+open when someone else changes the same thing, OK only writes what you changed in it.
+
+**Esc menu → Campaign levels...** lists the levels. **Go to level** takes everyone to another level, and
+**Add level...** picks an island and takes everyone to it as a new level. The level you leave stays in the campaign
+as it is. Removing and reordering levels, and the campaign's description, stay in the campaign editor's level list.
+
+**Save campaign** writes your own copy to your `campaigns` folder; a player who joined is asked for a name the first
+time. **Test this level** takes you out of the session.
+
+Press **Enter** to chat with everyone in the session. Messages also show on the info lines, and chat commands such
+as `/ignore` work as in a game. Map editing sessions have the same chat.
+
 ## Difficulty and the AI
 
 Computer players are one of:

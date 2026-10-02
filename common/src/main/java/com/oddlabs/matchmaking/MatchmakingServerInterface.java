@@ -106,9 +106,10 @@ public interface MatchmakingServerInterface {
      * {@link MatchmakingClientInterface#editorSessionJoined} or {@link MatchmakingClientInterface#editorSessionFailed}.
      * Leaves any session the player is in.
      *
-     * @param size the island size, as a {@code Game.SIZE_} index
+     * @param size     the island size, as a {@code Game.SIZE_} index
+     * @param campaign whether the session shares a campaign rather than one island
      */
-    void hostEditorSession(String name, int size, int terrain);
+    void hostEditorSession(String name, int size, int terrain, boolean campaign);
 
     /**
      * Joins a shared map editor session. The server asks a player in it for the island, which arrives with
@@ -140,4 +141,10 @@ public interface MatchmakingServerInterface {
      */
     void sendEditorPresence(float x, float y, float z, float horiz_angle, float vert_angle, float cursor_x,
             float cursor_y, float radius, int brush);
+
+    /**
+     * A chat message to everyone in the session, this player too, at most {@link EditorSessionInfo#MAX_CHAT_LENGTH}
+     * characters. It comes back filtered as the chat rooms filter it.
+     */
+    void sendEditorChat(String message);
 }

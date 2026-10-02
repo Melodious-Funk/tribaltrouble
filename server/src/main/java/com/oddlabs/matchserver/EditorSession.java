@@ -19,6 +19,8 @@ import java.util.Map;
  * last pieces arrive, which is the one order every player lays them in, and each is acknowledged to its sender in
  * that order too. A player joining is sent every edit from the moment they join, and one of the players already
  * there is asked for the island as it is at that moment, on top of which those edits go.
+ *
+ * <p>A campaign session is relayed alike; what goes in its edits and its island is the players' business.
  */
 final class EditorSession {
     private static final Map<Integer, EditorSession> sessions = new LinkedHashMap<>();
@@ -53,14 +55,16 @@ final class EditorSession {
     private final @NonNull String name;
     private final int size;
     private final int terrain;
+    private final boolean campaign;
     // In the order they joined; the first is shown as the host.
     private final List<Member> members = new ArrayList<>();
 
-    private EditorSession(int id, @NonNull String name, int size, int terrain) {
+    private EditorSession(int id, @NonNull String name, int size, int terrain, boolean campaign) {
         this.id = id;
         this.name = name;
         this.size = size;
         this.terrain = terrain;
+        this.campaign = campaign;
     }
 
     static @NonNull Collection<EditorSession> all() {
@@ -73,24 +77,25 @@ final class EditorSession {
 
     /** Opens a session with its host in it, who has the island already. */
     static @NonNull EditorSession open(@NonNull Client host, @NonNull String nick, @Nullable String name, int size,
-            int terrain) {
+            int terrain, boolean campaign) {
         String session_name = name != null && SharedMap.isValidName(name) && BannedWordFilter.isAllowed(
                 name) ? name : nick;
         EditorSession session = new EditorSession(next_id++, session_name, Math.clamp(size, 0, MAX_SIZE),
-                Math.clamp(terrain, 0, MAX_TERRAIN));
+                Math.clamp(terrain, 0, MAX_TERRAIN), campaign);
         sessions.put(session.id, session);
         Member member = new Member(host, nick, 0);
         member.ready = true;
         session.members.add(member);
         host.getClientInterface().editorSessionJoined(session.id, session.name, member.slot);
-        MatchmakingServer.getLogger().info(nick + " opened editor session " + session.id + " \"" + session.name + "\"");
+        MatchmakingServer.getLogger().info(
+                nick + " opened " + (campaign ? "campaign" : "editor") + " session " + session.id + " \"" + session.name + "\"");
         return session;
     }
 
     @NonNull
     EditorSessionInfo info() {
         String host = members.isEmpty() ? "" : members.getFirst().nick;
-        return new EditorSessionInfo(id, name, host, size, terrain, members.size());
+        return new EditorSessionInfo(id, name, host, size, terrain, members.size(), campaign);
     }
 
     /**
@@ -210,5 +215,14 @@ final class EditorSession {
             if (member != sender && member.ready)
                 member.out().receiveEditorPresence(sender.slot, x, y, z, horiz_angle, vert_angle, cursor_x, cursor_y,
                         radius, brush);
+    }
+
+    /** Passes a chat message, filtered already, to everyone in the session, its writer too. */
+    void chat(@NonNull Client from, @NonNull String message) {
+        Member sender = find(from);
+        if (sender == null)
+            return;
+        for (Member member : members)
+            member.out().receiveEditorChat(sender.slot, message);
     }
 }

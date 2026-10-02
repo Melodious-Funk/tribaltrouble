@@ -18,7 +18,8 @@ import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
 import static com.oddlabs.tt.gui.Placement.BOTTOM_RIGHT;
 
 /**
- * Joins a shared map editor session: waits while a player in it hands over the island, then opens the editor on it.
+ * Joins a shared map editor session: waits while a player in it hands over the island, or the campaign in a campaign
+ * session, then opens the editor on it.
  */
 final class JoinSessionForm extends Form implements EditorSession.JoinListener {
     private static final int STATUS_WIDTH = 420;
@@ -78,6 +79,14 @@ final class JoinSessionForm extends Form implements EditorSession.JoinListener {
         remove();
         ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, map.settings(),
                 map.name(), map.description(), map.heights(), map.resources(),
+                new MapEditorLoader.SessionStart.Join(session)));
+    }
+
+    @Override
+    public void arrivedCampaign(@NonNull EditorSession session, @NonNull CampaignSession campaign) {
+        joining = null;
+        remove();
+        ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, campaign,
                 new MapEditorLoader.SessionStart.Join(session)));
     }
 

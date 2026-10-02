@@ -848,14 +848,14 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
             MatchmakingServer.getLogger().info(profile.getNick() + " deleted map " + hash);
     }
 
-    public void hostEditorSession(String name, int size, int terrain) {
+    public void hostEditorSession(String name, int size, int terrain, boolean campaign) {
         leaveEditorSession();
         Profile profile = getProfile();
         if (profile == null) {
             client_interface.editorSessionFailed(EditorSessionInfo.ERROR_NOT_ALLOWED);
             return;
         }
-        editor_session = EditorSession.open(this, profile.getNick(), name, size, terrain);
+        editor_session = EditorSession.open(this, profile.getNick(), name, size, terrain, campaign);
     }
 
     public void joinEditorSession(int session_id) {
@@ -903,5 +903,21 @@ public final class Client implements MatchmakingServerInterface, ConnectionInter
             float cursor_y, float radius, int brush) {
         if (editor_session != null)
             editor_session.presence(this, x, y, z, horiz_angle, vert_angle, cursor_x, cursor_y, radius, brush);
+    }
+
+    public void sendEditorChat(String message) {
+        EditorSession session = editor_session;
+        if (session == null || message == null || getProfile() == null)
+            return;
+        String text = message.strip();
+        if (text.isEmpty() || text.length() > EditorSessionInfo.MAX_CHAT_LENGTH)
+            return;
+        if (guest) {
+            client_interface.receivePrivateMessage("Server", "Sorry, only registered users are able to chat.");
+            return;
+        }
+        // As in the chat rooms, the log keeps the uncensored message as moderation evidence.
+        server.getChatLogger().info("[editor] " + formatChat(text));
+        session.chat(this, BannedWordFilter.censorChatMessage(text));
     }
 }

@@ -39,6 +39,8 @@ final class PlayersForm extends Form {
     private final @NonNull PulldownMenu<Void> @NonNull [] menu_team;
     private final @NonNull PulldownMenu<Scenario.Role> @NonNull [] menu_role;
     private final @NonNull HorizButton button_ok;
+    // The players as the window opened, so only what was changed in it is changed, in a shared session too.
+    private final Scenario.@NonNull PlayerSetup @NonNull [] opened = new Scenario.PlayerSetup[Scenario.NUM_PLAYERS];
 
     @SuppressWarnings("unchecked")
     PlayersForm(@NonNull GUIRoot gui_root, @NonNull ScenarioLayer layer, @NonNull Runnable changed) {
@@ -53,6 +55,7 @@ final class PlayersForm extends Form {
         Label previous = null;
         for (int i = 0; i < Scenario.NUM_PLAYERS; i++) {
             Scenario.PlayerSetup player = scenario.players[i];
+            opened[i] = player.copy();
             Label name = new Label(Scenario.playerName(i), Skin.getSkin().getEditFont(), NAME_WIDTH);
             name.setColor(Settings.getSettings().team_colours[i]);
             check_enabled[i] = new CheckBox(player.enabled, CampaignEditor.i18n("takes_part"));
@@ -128,18 +131,27 @@ final class PlayersForm extends Form {
         Scenario scenario = layer.getScenario();
         for (int i = 0; i < Scenario.NUM_PLAYERS; i++) {
             Scenario.PlayerSetup player = scenario.players[i];
+            Scenario.PlayerSetup before = opened[i];
             boolean enabled = i == 0 || check_enabled[i].isMarked();
             int race = menu_race[i].getChosenItemIndex();
             int team = menu_team[i].getChosenItemIndex();
             Scenario.Role role = menu_role[i].getItem(menu_role[i].getChosenItemIndex()).getAttachment();
+            // What was left as it was keeps what another player in a shared session may have made of it since.
+            if (enabled == before.enabled)
+                enabled = player.enabled;
+            if (race == before.race)
+                race = player.race;
+            if (team == before.team)
+                team = player.team;
+            if (role == null || role == before.role)
+                role = player.role;
             boolean shown_changed = enabled != player.enabled || race != player.race;
             if (shown_changed || team != player.team || role != player.role)
                 layer.markModified();
             player.enabled = enabled;
             player.race = race;
             player.team = team;
-            if (role != null)
-                player.role = role;
+            player.role = role;
             if (shown_changed)
                 layer.playerChanged(i);
         }

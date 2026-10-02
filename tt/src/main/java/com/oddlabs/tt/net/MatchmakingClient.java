@@ -520,6 +520,12 @@ public final class MatchmakingClient implements MatchmakingClientInterface, Conn
                     radius, brush);
     }
 
+    @Override
+    public void receiveEditorChat(int slot, String message) {
+        if (editor_session_listener != null && message != null)
+            editor_session_listener.receiveEditorChat(slot, message);
+    }
+
     public @Nullable MatchmakingServerLoginInterface getLoginInterface() {
         assert !isConnected();
         return matchmaking_login_interface;

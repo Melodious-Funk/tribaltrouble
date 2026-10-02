@@ -26,6 +26,9 @@ final class LevelForm extends Form {
     LevelForm(@NonNull ScenarioLayer layer, @NonNull Runnable changed) {
         super(CampaignEditor.i18n("level_caption"));
         Scenario scenario = layer.getScenario();
+        String opened_title = scenario.title;
+        String opened_briefing = scenario.briefing;
+        String opened_objective = scenario.objective;
         editline_title = new EditLine(TEXT_WIDTH, MAX_TITLE);
         editline_title.set(scenario.title);
         EditBox editbox_briefing = new EditBox(TEXT_WIDTH, 120, MAX_TEXT);
@@ -45,9 +48,13 @@ final class LevelForm extends Form {
                 editline_title.triggerError();
                 return;
             }
-            scenario.title = title;
-            scenario.briefing = editbox_briefing.getContents();
-            scenario.objective = editbox_objective.getContents();
+            // Only what was changed here, so what another player in a shared session changed meanwhile stays.
+            if (!title.equals(opened_title))
+                scenario.title = title;
+            if (!editbox_briefing.getContents().equals(opened_briefing))
+                scenario.briefing = editbox_briefing.getContents();
+            if (!editbox_objective.getContents().equals(opened_objective))
+                scenario.objective = editbox_objective.getContents();
             layer.markModified();
             remove();
             changed.run();

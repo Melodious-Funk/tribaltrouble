@@ -23,6 +23,8 @@ public interface EditorSessionListener {
     void receiveEditorPresence(int slot, float x, float y, float z, float horiz_angle, float vert_angle,
             float cursor_x, float cursor_y, float radius, int brush);
 
+    void receiveEditorChat(int slot, @NonNull String message);
+
     /** The connection to the matchmaking server closed, ending the session. */
     void connectionClosed();
 }

@@ -8,11 +8,12 @@ import java.io.Serializable;
 /**
  * A shared map editor session as the multiplayer menu lists it: players edit one island together, each seeing the
  * others' cameras and edits as they happen. The matchmaking server relays everything between them; the island itself
- * lives with the players, and one of them hands it to each player who joins.
+ * lives with the players, and one of them hands it to each player who joins. A campaign session shares a whole
+ * campaign the same way, its players editing one level of it at a time.
  */
 public final class EditorSessionInfo implements Serializable {
     @Serial
-    private static final long serialVersionUID = 1;
+    private static final long serialVersionUID = 2;
 
     /** Players editing one island at most; each has a colour of their own. */
     public static final int MAX_MEMBERS = 8;
@@ -22,6 +23,8 @@ public final class EditorSessionInfo implements Serializable {
     public static final int MAX_SNAPSHOT_SIZE = 32 * 1024 * 1024;
     /** The longest session name; it is the map's name, which is as long as a shared map's may be. */
     public static final int MAX_NAME_LENGTH = SharedMap.MAX_NAME_LENGTH;
+    /** The longest chat message passed on to the others in a session. */
+    public static final int MAX_CHAT_LENGTH = 256;
 
     public static final int ERROR_NOT_ALLOWED = 1;
     public static final int ERROR_NO_SUCH_SESSION = 2;
@@ -35,14 +38,17 @@ public final class EditorSessionInfo implements Serializable {
     private final byte size;
     private final byte terrain;
     private final byte members;
+    private final boolean campaign;
 
-    public EditorSessionInfo(int id, @NonNull String name, @NonNull String host, int size, int terrain, int members) {
+    public EditorSessionInfo(int id, @NonNull String name, @NonNull String host, int size, int terrain, int members,
+            boolean campaign) {
         this.id = id;
         this.name = name;
         this.host = host;
         this.size = (byte) size;
         this.terrain = (byte) terrain;
         this.members = (byte) members;
+        this.campaign = campaign;
     }
 
     public int getId() {
@@ -69,5 +75,10 @@ public final class EditorSessionInfo implements Serializable {
 
     public int getMembers() {
         return members;
+    }
+
+    /** Whether the session shares a campaign, its levels' units and triggers too, rather than one island. */
+    public boolean isCampaign() {
+        return campaign;
     }
 }

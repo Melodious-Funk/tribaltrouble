@@ -6,6 +6,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -31,6 +33,8 @@ final class CampaignFile {
     static final String EXTENSION = ".ttcampaign";
 
     private static final int MAGIC = 0x54_54_43_50; // "TTCP"
+    // A campaign handed over in a shared session.
+    private static final int SHARED_MAGIC = 0x54_54_43_53; // "TTCS"
     private static final int VERSION = 1;
     private static final int MAX_LEVELS = 1000;
     // The map version the levels' islands are kept in. The file does not say, so it stays at what campaigns were
@@ -88,16 +92,7 @@ final class CampaignFile {
         try {
             try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(
                     Files.newOutputStream(temp))))) {
-                out.writeInt(MAGIC);
-                out.writeInt(VERSION);
-                out.writeUTF(description);
-                out.writeInt(levels.size());
-                for (Level level : levels)
-                    out.writeUTF(level.scenario.title);
-                for (Level level : levels) {
-                    new MapFile("", level.settings, level.heights, level.resources, level.preview).writeBody(out, MAP_VERSION);
-                    level.scenario.write(out);
-                }
+                writeContents(out, levels);
             }
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         } finally {
@@ -105,16 +100,92 @@ final class CampaignFile {
         }
     }
 
+    /** Everything a campaign file holds, from its magic on, with the given levels. */
+    private void writeContents(@NonNull DataOutputStream out, @NonNull List<@NonNull Level> contents)
+            throws IOException {
+        out.writeInt(MAGIC);
+        out.writeInt(VERSION);
+        out.writeUTF(description);
+        out.writeInt(contents.size());
+        for (Level level : contents)
+            out.writeUTF(level.scenario.title);
+        for (Level level : contents)
+            writeLevel(out, level);
+    }
+
+    private static void writeLevel(@NonNull DataOutputStream out, @NonNull Level level) throws IOException {
+        new MapFile("", level.settings, level.heights, level.resources, level.preview).writeBody(out, MAP_VERSION);
+        level.scenario.write(out);
+    }
+
     static @NonNull CampaignFile load(@NonNull Path path) throws IOException {
         try (var in = open(path)) {
-            String description = in.readUTF();
-            int count = readLevelCount(in);
-            for (int i = 0; i < count; i++)
-                in.readUTF();
-            List<Level> levels = new ArrayList<>(count);
-            for (int i = 0; i < count; i++)
-                levels.add(readLevel(in));
-            return new CampaignFile(nameOf(path), description, levels);
+            return readContents(in, nameOf(path));
+        }
+    }
+
+    /** Reads what {@link #writeContents} wrote after the magic and version, which {@link #open} has read. */
+    private static @NonNull CampaignFile readContents(@NonNull DataInputStream in, @NonNull String name)
+            throws IOException {
+        String description = in.readUTF();
+        int count = readLevelCount(in);
+        for (int i = 0; i < count; i++)
+            in.readUTF();
+        List<Level> levels = new ArrayList<>(count);
+        for (int i = 0; i < count; i++)
+            levels.add(readLevel(in));
+        return new CampaignFile(name, description, levels);
+    }
+
+    /** A campaign as a shared session hands it over, and the level being edited in it. */
+    record Shared(@NonNull CampaignFile file, int level) {
+    }
+
+    /**
+     * The campaign as a shared session hands it to a player joining: its name, the level being edited, and every
+     * level, that one as given since it may hold more than was stored in the campaign.
+     */
+    byte @NonNull [] toSharedBytes(int current, @NonNull Level shown) throws IOException {
+        List<Level> contents = new ArrayList<>(levels);
+        contents.set(current, shown);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(bytes)))) {
+            out.writeInt(SHARED_MAGIC);
+            out.writeUTF(name);
+            out.writeInt(current);
+            writeContents(out, contents);
+        }
+        return bytes.toByteArray();
+    }
+
+    static @NonNull Shared fromSharedBytes(byte @NonNull [] data) throws IOException {
+        try (var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(
+                new ByteArrayInputStream(data))))) {
+            if (in.readInt() != SHARED_MAGIC)
+                throw new IOException("Not a shared campaign");
+            String name = in.readUTF();
+            int current = in.readInt();
+            readHeader(in);
+            CampaignFile file = readContents(in, name);
+            if (current < 0 || current >= file.levels.size())
+                throw new IOException("The campaign has no level " + (current + 1));
+            return new Shared(file, current);
+        }
+    }
+
+    /** One level as a shared session passes it on, when everyone goes on to it. */
+    static byte @NonNull [] levelToBytes(@NonNull Level level) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(bytes)))) {
+            writeLevel(out, level);
+        }
+        return bytes.toByteArray();
+    }
+
+    static @NonNull Level levelFromBytes(byte @NonNull [] data) throws IOException {
+        try (var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(
+                new ByteArrayInputStream(data))))) {
+            return readLevel(in);
         }
     }
 
@@ -177,16 +248,20 @@ final class CampaignFile {
     private static @NonNull DataInputStream open(@NonNull Path path) throws IOException {
         var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(path))));
         try {
-            if (in.readInt() != MAGIC)
-                throw new IOException("Not a campaign file");
-            int version = in.readInt();
-            if (version < 1 || version > VERSION)
-                throw new IOException("Unsupported campaign version " + version);
+            readHeader(in);
             return in;
         } catch (IOException e) {
             in.close();
             throw e;
         }
+    }
+
+    private static void readHeader(@NonNull DataInputStream in) throws IOException {
+        if (in.readInt() != MAGIC)
+            throw new IOException("Not a campaign file");
+        int version = in.readInt();
+        if (version < 1 || version > VERSION)
+            throw new IOException("Unsupported campaign version " + version);
     }
 
     private static @NonNull String nameOf(@NonNull Path path) {

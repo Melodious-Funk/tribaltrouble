@@ -3,6 +3,8 @@ package com.oddlabs.tt.mapeditor;
 import com.oddlabs.matchmaking.EditorSessionInfo;
 import com.oddlabs.matchmaking.MatchmakingServerInterface;
 import com.oddlabs.matchmaking.Profile;
+import com.oddlabs.tt.net.ChatCommand;
+import com.oddlabs.tt.net.ChatMessage;
 import com.oddlabs.tt.net.EditorSessionListener;
 import com.oddlabs.tt.net.MatchmakingClient;
 import com.oddlabs.tt.net.Network;
@@ -11,8 +13,11 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,10 +25,12 @@ import java.util.TreeMap;
 
 /**
  * This player's place in a shared map editor session, through the matchmaking server: who else is in it, the edits
- * going back and forth, and, while joining, the island arriving from another player.
+ * going back and forth as {@link SessionMessage}s, the chat, and, while joining, the island or campaign arriving from
+ * another player.
  *
- * <p>The editor showing the island attaches itself once it is built. Until then, edits and presences that come in
- * wait here, to be laid over the island in the order they came.
+ * <p>The editor showing the island attaches itself once it is built, and detaches while another level of a campaign
+ * is built. Until it is attached, edits and presences that come in wait here, to be laid over the island in the order
+ * they came.
  */
 final class EditorSession implements EditorSessionListener {
     /** What the session tells the editor showing the island. */
@@ -32,15 +39,29 @@ final class EditorSession implements EditorSessionListener {
 
         void memberLeft(int slot, @NonNull String nick);
 
-        void edited(int slot, @NonNull EditOp op);
+        /**
+         * Another player's edit, as a {@link SessionMessage}; or this player's own once the server put it in the
+         * session's order, when it moves everyone to another level.
+         */
+        void received(int slot, byte @NonNull [] message);
 
-        /** The server put this player's oldest unacknowledged edit in the session's order. */
-        void acknowledged();
+        /**
+         * The server put this player's oldest unacknowledged edit in the session's order.
+         *
+         * @param kind its {@link SessionMessage} kind
+         */
+        void acknowledged(byte kind);
 
         void presence(int slot, @NonNull Presence presence);
 
-        /** The island as it is now, as a map file, for a player joining. */
+        /**
+         * The island as it is now, as a map file, for a player joining; or in a campaign session the campaign, as
+         * {@link CampaignFile#toSharedBytes} writes it.
+         */
         byte @NonNull [] snapshot() throws IOException;
+
+        /** A chat message came, which the session's chat history now ends with. */
+        void chatted();
 
         /** The session ended for this player, who keeps the island to go on with alone. */
         void ended(@NonNull String reason);
@@ -51,6 +72,8 @@ final class EditorSession implements EditorSessionListener {
         void progress(@NonNull String status);
 
         void arrived(@NonNull EditorSession session, @NonNull MapFile map);
+
+        void arrivedCampaign(@NonNull EditorSession session, @NonNull CampaignSession campaign);
 
         void failed(@NonNull String reason);
     }
@@ -95,6 +118,13 @@ final class EditorSession implements EditorSessionListener {
     private record Waiting(int slot, byte @NonNull [] data) {
     }
 
+    /** An edit of this player's on its way, and the whole of it when it moves everyone to another level. */
+    private record Sent(byte kind, byte @Nullable [] moves) {
+    }
+
+    /** Chat messages kept to show when the chat is opened. */
+    private static final int MAX_CHAT_HISTORY = 100;
+
     /** How a session reaches the matchmaking server: through the game's connection, or a stand-in. */
     interface Transport {
         /** The server, or null when not connected. */
@@ -130,14 +160,21 @@ final class EditorSession implements EditorSessionListener {
 
     private final @NonNull String name;
     private final boolean hosting;
+    private final boolean campaign;
     private int slot = -1;
     private final Map<Integer, String> members = new TreeMap<>();
     // Pieces of edits on their way, by the slot of the player making them.
     private final Map<Integer, ByteArrayOutputStream> parts = new HashMap<>();
     private final List<Waiting> waiting = new ArrayList<>();
     private final Map<Integer, Presence> presences = new HashMap<>();
+    private final Deque<@NonNull Sent> unacknowledged = new ArrayDeque<>();
+    // How many of the oldest unacknowledged edits were made in an editor since detached, whose acknowledgement goes
+    // to nobody.
+    private int stale;
+    // Players a snapshot was asked for while no editor was attached.
+    private final List<@NonNull String> snapshot_requests = new ArrayList<>();
+    private final List<@NonNull String> chat = new ArrayList<>();
     private @Nullable Editor editor;
-    private int size;
     private boolean ended;
     private @NonNull String end_reason = "";
 
@@ -145,9 +182,10 @@ final class EditorSession implements EditorSessionListener {
     private @Nullable ByteArrayOutputStream snapshot;
     private final @NonNull Transport transport;
 
-    EditorSession(@NonNull String name, boolean hosting, @NonNull Transport transport) {
+    EditorSession(@NonNull String name, boolean hosting, boolean campaign, @NonNull Transport transport) {
         this.name = name;
         this.hosting = hosting;
+        this.campaign = campaign;
         this.transport = transport;
         transport.listen(this);
     }
@@ -171,31 +209,30 @@ final class EditorSession implements EditorSessionListener {
     /**
      * Opens a session on the island the editor shows, for others to join from the multiplayer menu.
      *
-     * @param size the island's size in cells
+     * @param campaign whether it shares the campaign the island is a level of
      * @return the session, or null when not logged in to the multiplayer server
      */
     static @Nullable EditorSession host(@NonNull String name, @NonNull MapSettings settings, @NonNull Editor editor,
-            int size) {
+            boolean campaign) {
         if (NETWORK.server() == null || !canHost())
             return null;
         leaveCurrent();
-        EditorSession session = new EditorSession(name, true, NETWORK);
+        EditorSession session = new EditorSession(name, true, campaign, NETWORK);
         current = session;
-        session.open(editor, size, settings.size(), settings.terrain());
+        session.open(editor, settings.size(), settings.terrain());
         return session;
     }
 
     /**
      * Asks the server to open this session, with the editor attached at once since it has the island.
      *
-     * @param size the island's size in cells
      * @param size_index the island's size as a {@code Game.SIZE_} index
      */
-    void open(@NonNull Editor editor, int size, int size_index, int terrain) {
-        attach(editor, size);
+    void open(@NonNull Editor editor, int size_index, int terrain) {
+        attach(editor);
         MatchmakingServerInterface server = server();
         if (server != null)
-            server.hostEditorSession(name, size_index, terrain);
+            server.hostEditorSession(name, size_index, terrain, campaign);
     }
 
     /**
@@ -209,7 +246,7 @@ final class EditorSession implements EditorSessionListener {
             return null;
         }
         leaveCurrent();
-        EditorSession session = new EditorSession(info.getName(), false, NETWORK);
+        EditorSession session = new EditorSession(info.getName(), false, info.isCampaign(), NETWORK);
         current = session;
         session.join(info.getId(), listener);
         return session;
@@ -239,31 +276,56 @@ final class EditorSession implements EditorSessionListener {
         return slot;
     }
 
+    /** Whether the session shares a campaign rather than one island. */
+    boolean isCampaign() {
+        return campaign;
+    }
+
+    /** The chat messages so far, oldest first. */
+    @NonNull List<@NonNull String> getChat() {
+        return Collections.unmodifiableList(chat);
+    }
+
     boolean isEnded() {
         return ended;
     }
 
     /** Hands the session to the editor showing the island, laying over it what came in meanwhile. */
-    void attach(@NonNull Editor editor, int size) {
+    void attach(@NonNull Editor editor) {
         if (ended) {
             // It ended while the island was being built.
             editor.ended(end_reason);
             return;
         }
         this.editor = editor;
-        this.size = size;
         join_listener = null;
         snapshot = null;
         for (Map.Entry<Integer, String> member : members.entrySet())
             editor.memberJoined(member.getKey(), member.getValue());
-        for (Waiting edit : waiting)
-            deliver(edit.slot(), edit.data());
-        waiting.clear();
         for (Map.Entry<Integer, Presence> presence : presences.entrySet())
             editor.presence(presence.getKey(), presence.getValue());
         MatchmakingServerInterface server = server();
         if (!hosting && server != null)
             server.editorSessionReady();
+        // An edit may move everyone to another level, detaching the editor again; the rest wait for the next.
+        while (this.editor == editor && !waiting.isEmpty()) {
+            Waiting edit = waiting.removeFirst();
+            editor.received(edit.slot(), edit.data());
+        }
+        if (this.editor == editor) {
+            for (String nick : List.copyOf(snapshot_requests))
+                editorSnapshotRequested(nick);
+            snapshot_requests.clear();
+        }
+    }
+
+    /**
+     * Lets go of the editor while another level is built, keeping what comes in until the next one attaches. The
+     * acknowledgements of its edits go to nobody.
+     */
+    void detach() {
+        editor = null;
+        stale = unacknowledged.size();
     }
 
     /** Leaves the session; the server tells the others. */
@@ -286,21 +348,31 @@ final class EditorSession implements EditorSessionListener {
     }
 
     /**
-     * Sends an edit of this player's, in pieces the size the server takes.
+     * Sends an edit of this player's, a {@link SessionMessage}, in pieces the size the server takes.
      *
      * @return the bytes it took
      */
-    int sendEdit(@NonNull EditOp op) {
+    int sendEdit(byte @NonNull [] data) {
         MatchmakingServerInterface server = server();
-        if (server == null || ended)
+        if (server == null || ended || data.length == 0)
             return 0;
-        byte[] data = op.encode();
+        unacknowledged.add(new Sent(data[0], SessionMessage.movesEveryone(data) ? data : null));
         for (int offset = 0;; offset += EditorSessionInfo.CHUNK_SIZE) {
             int end = Math.min(data.length, offset + EditorSessionInfo.CHUNK_SIZE);
             server.sendEditorEdit(Arrays.copyOfRange(data, offset, end), end == data.length);
             if (end == data.length)
                 return data.length;
         }
+    }
+
+    /** Sends a chat message to everyone in the session; it comes back from the server like the others' do. */
+    void sendChat(@NonNull String message) {
+        MatchmakingServerInterface server = server();
+        String text = message.strip();
+        if (server == null || ended || text.isEmpty())
+            return;
+        server.sendEditorChat(text.length() > EditorSessionInfo.MAX_CHAT_LENGTH ? text.substring(0,
+                EditorSessionInfo.MAX_CHAT_LENGTH) : text);
     }
 
     void sendPresence(@NonNull Presence presence) {
@@ -360,8 +432,14 @@ final class EditorSession implements EditorSessionListener {
     public void editorSnapshotRequested(@NonNull String nick) {
         Editor attached = editor;
         MatchmakingServerInterface server = server();
-        if (attached == null || server == null)
+        if (server == null || ended)
             return;
+        // Asked while another level is built: handed over once it is, with what came in meanwhile laid over it.
+        if (attached == null || !waiting.isEmpty()) {
+            if (!snapshot_requests.contains(nick))
+                snapshot_requests.add(nick);
+            return;
+        }
         byte[] file;
         try {
             file = attached.snapshot();
@@ -392,16 +470,20 @@ final class EditorSession implements EditorSessionListener {
         if (received.size() < total_size)
             return;
         snapshot = null;
-        MapFile map;
         try {
-            map = MapFile.fromBytes(received.toByteArray(), name);
+            if (campaign) {
+                CampaignSession shared = CampaignSession.shared(CampaignFile.fromSharedBytes(received.toByteArray()));
+                join_listener = null;
+                joining.arrivedCampaign(this, shared);
+            } else {
+                MapFile map = MapFile.fromBytes(received.toByteArray(), name);
+                join_listener = null;
+                joining.arrived(this, map);
+            }
         } catch (IOException | RuntimeException e) {
             leave();
             joining.failed(MapEditor.i18n("load_failed", e.getMessage()));
-            return;
         }
-        join_listener = null;
-        joining.arrived(this, map);
     }
 
     @Override
@@ -411,31 +493,32 @@ final class EditorSession implements EditorSessionListener {
         if (!last)
             return;
         parts.remove(member_slot);
-        byte[] edit = pieces.toByteArray();
-        if (editor != null)
-            deliver(member_slot, edit);
-        else
-            waiting.add(new Waiting(member_slot, edit));
+        deliver(member_slot, pieces.toByteArray());
     }
 
+    /** Hands an edit to the editor, or keeps it for the next one when none is attached or others are waiting. */
     private void deliver(int member_slot, byte @NonNull [] data) {
         Editor attached = editor;
-        if (attached == null)
-            return;
-        EditOp op;
-        try {
-            op = EditOp.decode(data, size);
-        } catch (IOException | RuntimeException e) {
-            IO.println("Dropping an edit from slot " + member_slot + " that could not be read: " + e);
-            return;
-        }
-        attached.edited(member_slot, op);
+        if (attached != null && waiting.isEmpty())
+            attached.received(member_slot, data);
+        else
+            waiting.add(new Waiting(member_slot, data));
     }
 
     @Override
     public void editorEditAcknowledged() {
-        if (editor != null)
-            editor.acknowledged();
+        Sent sent = unacknowledged.poll();
+        if (sent == null)
+            return;
+        boolean was_stale = stale > 0;
+        if (was_stale)
+            stale--;
+        // Moving everyone on happens for its sender too, now that it has its place among the others' edits.
+        byte[] moves = sent.moves();
+        if (moves != null)
+            deliver(slot, moves);
+        else if (!was_stale && editor != null)
+            editor.acknowledged(sent.kind());
     }
 
     @Override
@@ -445,6 +528,21 @@ final class EditorSession implements EditorSessionListener {
         presences.put(member_slot, presence);
         if (editor != null)
             editor.presence(member_slot, presence);
+    }
+
+    @Override
+    public void receiveEditorChat(int member_slot, @NonNull String message) {
+        String nick = members.getOrDefault(member_slot, "?");
+        if (ChatCommand.isIgnoring(nick))
+            return;
+        ChatMessage chat_message = new ChatMessage(nick, message, ChatMessage.Type.NORMAL);
+        chat.add(chat_message.formatShort());
+        if (chat.size() > MAX_CHAT_HISTORY)
+            chat.removeFirst();
+        // The editor's info lines show it, as they show chat in a game.
+        Network.getChatHub().chat(chat_message);
+        if (editor != null)
+            editor.chatted();
     }
 
     @Override

@@ -1,5 +1,6 @@
 package com.oddlabs.tt.mapeditor;
 
+import com.oddlabs.matchmaking.EditorSessionInfo;
 import com.oddlabs.matchmaking.MatchmakingServerInterface;
 import com.oddlabs.tt.model.RacesResources;
 import com.oddlabs.tt.player.campaign.CampaignState;
@@ -17,13 +18,16 @@ import java.util.List;
  * areas, and the triggers that tell the story and decide the level.
  *
  * <p>Player 0 is the one playing; the others are computer players. Objects, areas and triggers carry ids that stay
- * the same while they are edited, so triggers can name them.
+ * the same while they are edited, so triggers can name them. In a shared session each player makes ids of their own,
+ * so two players never make the same one.
  */
 final class Scenario {
     static final int NUM_PLAYERS = MatchmakingServerInterface.MAX_PLAYERS;
 
     // Version 2 gave trigger steps a building beside their object.
-    private static final int VERSION = 2;
+    static final int VERSION = 2;
+    /** In a shared session, the ids a player makes are their slot modulo this. */
+    private static final int ID_STRIDE = EditorSessionInfo.MAX_MEMBERS;
     private static final int MAX_ITEMS = 100_000;
 
     /** How a player is run. */
@@ -151,6 +155,8 @@ final class Scenario {
     final @NonNull List<@NonNull Area> areas = new ArrayList<>();
     final @NonNull List<@NonNull Trigger> triggers = new ArrayList<>();
     private int next_id = 1;
+    // This player's slot in a shared session, which new ids are made from, or -1 when editing alone.
+    private int id_slot = -1;
 
     private Scenario(@NonNull String title) {
         this.title = title;
@@ -172,7 +178,23 @@ final class Scenario {
     }
 
     int newId() {
-        return next_id++;
+        int id = next_id;
+        if (id_slot >= 0)
+            id += Math.floorMod(id_slot - id, ID_STRIDE);
+        next_id = id + 1;
+        return id;
+    }
+
+    /**
+     * Makes new ids from a slot in a shared session, as no other player in it makes, or one by one again when -1.
+     */
+    void setIdSlot(int slot) {
+        id_slot = slot;
+    }
+
+    /** Notes an id another player made, so new ones go past it. */
+    void sawId(int id) {
+        next_id = Math.max(next_id, id + 1);
     }
 
     static @NonNull String playerName(int player) {

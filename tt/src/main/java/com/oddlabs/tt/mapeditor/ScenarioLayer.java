@@ -30,7 +30,7 @@ import java.util.Set;
  * clear of resources and of each other, as the game would place them; an edit that takes their ground out of the
  * playable region takes them away, until it is undone.
  */
-final class ScenarioLayer {
+final class ScenarioLayer implements ScenarioSync.Target {
     /** How close the cursor must be to a unit to point at it, in meters. */
     private static final float UNIT_REACH = 2.5f;
     /** Cells kept between painted units at the lowest density above zero. */
@@ -67,6 +67,8 @@ final class ScenarioLayer {
     // The warrior standing on each guarded tower, by the tower's id.
     private final Map<Integer, SceneryModel> guards = new HashMap<>();
     private boolean modified;
+    // Goes up with every change, so a shared session can tell when to look for something to send.
+    private int changes;
 
     ScenarioLayer(@NonNull World world, @NonNull RacesResources races, @NonNull AccessMap access,
             @NonNull ResourceLayer resources, @NonNull Scenario scenario) {
@@ -83,7 +85,8 @@ final class ScenarioLayer {
         }
     }
 
-    @NonNull Scenario getScenario() {
+    @Override
+    public @NonNull Scenario getScenario() {
         return scenario;
     }
 
@@ -93,7 +96,17 @@ final class ScenarioLayer {
     }
 
     void markModified() {
+        touched();
+    }
+
+    private void touched() {
         modified = true;
+        changes++;
+    }
+
+    @Override
+    public int getChangeCount() {
+        return changes;
     }
 
     void markSaved() {
@@ -173,7 +186,7 @@ final class ScenarioLayer {
                 show(placement);
             }
         }
-        modified = true;
+        touched();
     }
 
     /** Sets the models on the ground again where the heights changed, in cells (inclusive). */
@@ -273,7 +286,7 @@ final class ScenarioLayer {
         occupy(placement, placement.id());
         show(placement);
         stroke.added.add(placement);
-        modified = true;
+        touched();
     }
 
     private void remove(Scenario.@NonNull Placement placement, @NonNull Stroke stroke) {
@@ -283,7 +296,7 @@ final class ScenarioLayer {
         // Taking away what this stroke put down leaves nothing to restore.
         if (!stroke.added.remove(placement))
             stroke.removed.add(placement);
-        modified = true;
+        touched();
     }
 
     // ---- Painting ----
@@ -424,7 +437,32 @@ final class ScenarioLayer {
             if (before != null)
                 scenario.areas.add(before);
         }
-        modified = true;
+        touched();
+    }
+
+    // ---- Shared sessions ----
+
+    @Override
+    public void applyShared(@NonNull Map<@NonNull Long, byte @Nullable []> items, int @Nullable [] order) {
+        ScenarioItems.apply(scenario, items, order, new ScenarioItems.Shown() {
+            @Override
+            public void placementRemoved(Scenario.@NonNull Placement placement) {
+                occupy(placement, 0);
+                hide(placement);
+            }
+
+            @Override
+            public void placementAdded(Scenario.@NonNull Placement placement) {
+                occupy(placement, placement.id());
+                show(placement);
+            }
+
+            @Override
+            public void playerChanged(int player) {
+                ScenarioLayer.this.playerChanged(player);
+            }
+        });
+        touched();
     }
 
     // ---- Areas ----
@@ -433,14 +471,14 @@ final class ScenarioLayer {
     private void before(Scenario.@NonNull Area area, @NonNull Stroke stroke) {
         if (!stroke.areas_before.containsKey(area.id))
             stroke.areas_before.put(area.id, new Scenario.Area(area.id, area.name, area.x, area.y, area.radius));
-        modified = true;
+        touched();
     }
 
     Scenario.@NonNull Area addArea(float x, float y, float radius, @NonNull Stroke stroke) {
         Scenario.Area area = new Scenario.Area(scenario.newId(), scenario.newAreaName(), x, y, radius);
         scenario.areas.add(area);
         stroke.areas_before.put(area.id, null);
-        modified = true;
+        touched();
         return area;
     }
 

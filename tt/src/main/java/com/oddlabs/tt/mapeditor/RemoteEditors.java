@@ -22,7 +22,7 @@ import java.util.TreeMap;
 /**
  * The other players in a shared session as this player sees them: each one's camera where it is, with their name over
  * it, their brush on the ground and a fading outline round each edit of theirs, all in the player's colour. A list of
- * everyone in the session, this player too, stands at the left below the toolbar.
+ * everyone in the session, this player too, stands at the left below the toolbar, with how to chat with them.
  */
 final class RemoteEditors implements AutoCloseable {
     /** How fast (1/seconds) a shown camera closes on where its player last said it was. */
@@ -271,6 +271,7 @@ final class RemoteEditors implements AutoCloseable {
             String text = member.getKey() == own_slot ? MapEditor.i18n("session_you", nick) : nick;
             roster.add(new Label(text, font).setColor(colorOf(member.getKey())));
         }
+        roster.add(new Label(MapEditor.i18n("session_chat_hint"), font));
         int y = roster_top >= 0 ? roster_top : owner.getHeight() - ROSTER_MARGIN;
         for (Label label : roster) {
             y -= label.getHeight();

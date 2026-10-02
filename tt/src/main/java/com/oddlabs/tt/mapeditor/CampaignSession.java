@@ -34,6 +34,20 @@ final class CampaignSession {
         return new CampaignSession(file, file.name);
     }
 
+    /** A new campaign whose first level is an island, opened on that level. */
+    static @NonNull CampaignSession startingWith(@NonNull MapFile island) {
+        CampaignSession session = create();
+        session.file.levels.add(CampaignFile.Level.of(island, CampaignEditor.i18n("level_default_title", 1)));
+        return session;
+    }
+
+    /** A campaign handed over in a shared session, not saved here yet, opened on the level being edited. */
+    static @NonNull CampaignSession shared(CampaignFile.@NonNull Shared shared) {
+        CampaignSession session = new CampaignSession(shared.file(), null);
+        session.level = shared.level();
+        return session;
+    }
+
     CampaignFile.@NonNull Level getLevel() {
         return file.levels.get(level);
     }

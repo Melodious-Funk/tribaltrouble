@@ -24,12 +24,13 @@ import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
 import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
 
 /**
- * The multiplayer menu's tab of shared map editor sessions: islands players are editing together. Join one to edit
- * it with them, or host one on an island of your own.
+ * The multiplayer menu's tab of shared map editor sessions: islands, or whole campaigns, players are editing
+ * together. Join one to edit it with them, or host one of your own.
  */
 public final class EditorSessionPanel extends Panel {
-    private static final int NAME_WIDTH = 330;
-    private static final int HOST_WIDTH = 170;
+    private static final int NAME_WIDTH = 260;
+    private static final int HOST_WIDTH = 140;
+    private static final int KIND_WIDTH = 100;
     private static final int BUTTON_WIDTH = 110;
     private static final int BUTTON_WIDTH_LONG = 170;
 
@@ -49,6 +50,7 @@ public final class EditorSessionPanel extends Panel {
         this.network = network;
         Label label_headline = new Label(MapEditor.i18n("session_headline"), Skin.getSkin().getHeadlineFont());
         ColumnInfo[] columns = new ColumnInfo[]{new ColumnInfo(MapEditor.i18n("column_name"), NAME_WIDTH),
+                new ColumnInfo(MapEditor.i18n("column_kind"), KIND_WIDTH),
                 new ColumnInfo(MapEditor.i18n("column_host"), HOST_WIDTH), new ColumnInfo(MapEditor.i18n(
                         "column_size"), 120), new ColumnInfo(MapEditor.i18n("column_editors"), 100)};
         list = new MultiColumnComboBox<>(gui_root, columns, list_height);
@@ -115,6 +117,8 @@ public final class EditorSessionPanel extends Panel {
                 continue;
             Row<EditorSessionInfo, Label> row = new Row<>(List.of(
                     new Label(info.getName(), font, NAME_WIDTH),
+                    new Label(MapEditor.i18n(info.isCampaign() ? "session_kind_campaign" : "session_kind_map"), font,
+                            KIND_WIDTH),
                     new Label(info.getHost(), font, HOST_WIDTH),
                     new Label(ServerMessageBundler.getSizeString(info.getSize()), font),
                     new Label(MapEditor.i18n("session_editors", info.getMembers(), EditorSessionInfo.MAX_MEMBERS),

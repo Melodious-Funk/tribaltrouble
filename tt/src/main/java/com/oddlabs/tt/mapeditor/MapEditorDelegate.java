@@ -14,6 +14,7 @@ import com.oddlabs.tt.camera.MapCameraOwner;
 import com.oddlabs.tt.delegate.CameraDelegate;
 import com.oddlabs.tt.event.LocalEventQueue;
 import com.oddlabs.tt.form.MessageForm;
+import com.oddlabs.tt.form.ProgressForm;
 import com.oddlabs.tt.form.QuestionForm;
 import com.oddlabs.tt.form.SelectGameMenu;
 import com.oddlabs.tt.gui.CheckBox;
@@ -80,7 +81,8 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
  *
  * <p>In a shared session the island is edited by several players at once. Each one's edits go to the others a few
  * times a second, and each sees the others' cameras, brushes and edits in their colours. Undo takes back this
- * player's own edits only.
+ * player's own edits only. Enter opens the session's chat. A campaign session shares the level's units, buildings,
+ * areas, triggers and texts the same way, and moves everyone on together when one of them goes to another level.
  */
 final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHost, MapCameraOwner,
         CampaignTools.Host {
@@ -208,6 +210,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final SessionSync.@NonNull Link link;
     private @Nullable EditorSession session;
     private @Nullable SessionSync sync;
+    // What keeps a campaign level's units, areas and triggers in step, in a campaign session.
+    private @Nullable ScenarioSync scenario_sync;
     private @Nullable RemoteEditors remotes;
     private float send_timer;
     private float send_interval = SEND_INTERVAL;
@@ -218,6 +222,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private float remote_busy;
     // Whether the session is under way, past taking in who was there already.
     private boolean session_live;
+    // This player asked everyone to go on to another level, and waits for the server to put it in order.
+    private boolean moving;
+    // The level everyone is moving to, done on the next frame.
+    private @Nullable LevelMove next_level;
+    // The session's chat, while open, and whether the chat key went down here, to open it once it comes up.
+    private @Nullable EditorChatForm chat_form;
+    private boolean chat_key_down;
 
     MapEditorDelegate(@NonNull NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull World world,
             @NonNull AnimationManager manager, @NonNull Picker picker, @NonNull Cheat view,
@@ -515,6 +526,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     /** Runs every frame: the world's animations, painting while a button is held, and pushing edits to the GPU. */
     private void tick(float t) {
+        LevelMove move = next_level;
+        if (move != null) {
+            next_level = null;
+            moveTo(move);
+            return;
+        }
         // A release can go astray, as when it happens outside the window, and the cursor would stay hidden for good.
         if (look != null && !Renderer.getLocalInput().getInputProvider().isButtonDown(MIDDLE_BUTTON))
             endLook();
@@ -1018,7 +1035,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     @Override
     public void mousePressed(@NonNull MouseButton button, int x, int y) {
-        if (map_mode || isOverToolbar(x, y))
+        // Nothing is edited while everyone is moving on to another level.
+        if (map_mode || isOverToolbar(x, y) || (moving && button != MouseButton.MIDDLE))
             return;
         if (campaign != null && campaign.isPicking() && button != MouseButton.MIDDLE) {
             // Picking for a trigger: left takes what is under the cursor, right calls it off.
@@ -1117,7 +1135,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             }
             // A press while in map mode is the map camera's to handle: it flies back.
         }
+        if (handleChatKey(event))
+            return;
         if (event.getPhase() == InputPhase.PRESSED && !map_mode) {
+            if (moving && (event.isControlDown() || event.getKeyCode() == Key.RETURN)) {
+                event.consume();
+                return;
+            }
             if (event.isControlDown() && event.getKeyCode() == Key.Z) {
                 undo();
                 event.consume();
@@ -1151,7 +1175,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             return false;
         if (brush.isCourse()) {
             switch (key) {
-                case RETURN -> layCourse();
+                case RETURN -> {
+                    // In a session, Enter with no course to lay opens the chat.
+                    if (course.isEmpty() && session != null)
+                        return false;
+                    layCourse();
+                }
                 case BACK -> removeCoursePoint();
                 case ESCAPE -> {
                     if (course.isEmpty())
@@ -1180,6 +1209,59 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             return true;
         }
         return false;
+    }
+
+    /**
+     * The chat key opens the session's chat once it comes up, as in a game, so letting go of it does not send the empty
+     * line at once.
+     *
+     * @return whether the key was taken
+     */
+    private boolean handleChatKey(@NonNull InputEvent event) {
+        if (session == null)
+            return false;
+        if (event.getPhase() == InputPhase.PRESSED) {
+            if (event.consumeAction(GameAction.GLOBAL_CHAT) || event.consumeAction(GameAction.GLOBAL_CHAT_TEAM)) {
+                chat_key_down = true;
+                event.consume();
+                return true;
+            }
+        } else if (event.getPhase() == InputPhase.RELEASED && chat_key_down) {
+            if (event.consumeAction(GameAction.GLOBAL_CHAT) || event.consumeAction(GameAction.GLOBAL_CHAT_TEAM)) {
+                chat_key_down = false;
+                openChat();
+                event.consume();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Shows the session's chat at the bottom left, ready to type in. */
+    private void openChat() {
+        EditorSession current = session;
+        if (current == null || getGUIRoot().getModalDelegate() != null)
+            return;
+        EditorChatForm form = chat_form;
+        if (form == null) {
+            form = new EditorChatForm(getGUIRoot().getInfoPrinter(), current);
+            form.addCloseListener(() -> {
+                chat_form = null;
+                setFocus();
+            });
+            chat_form = form;
+            addChild(form);
+            form.setPos(GameCamera.SCROLL_BUFFER, (campaign_bar != null ? campaign_bar.getHeight() : 0)
+                    + GameCamera.SCROLL_BUFFER);
+        }
+        form.setFocus();
+    }
+
+    private void closeChat() {
+        EditorChatForm form = chat_form;
+        chat_form = null;
+        if (form != null)
+            form.remove();
     }
 
     // ---- Brush outline ----
@@ -1322,13 +1404,20 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                     session == null && EditorSession.canHost() ? this::share : null));
             return;
         }
-        getGUIRoot().addModalForm(new EditorMenu(CampaignEditor.i18n("editor_headline"), List.of(
-                new EditorMenu.Entry(MapEditor.i18n("resume"), () -> {
-                }),
-                new EditorMenu.Entry(CampaignEditor.i18n("save_campaign"), () -> saveCampaign(null)),
-                new EditorMenu.Entry(CampaignEditor.i18n("test_level"), this::chooseTestDifficulty),
-                new EditorMenu.Entry(CampaignEditor.i18n("campaign_levels"), this::backToCampaign),
-                new EditorMenu.Entry(MapEditor.i18n("exit_editor"), this::exit))));
+        List<EditorMenu.Entry> entries = new ArrayList<>();
+        entries.add(new EditorMenu.Entry(MapEditor.i18n("resume"), () -> {
+        }));
+        entries.add(new EditorMenu.Entry(CampaignEditor.i18n("save_campaign"), () -> saveCampaign(null)));
+        // In a session the levels are gone through together, without leaving the editor.
+        if (session != null)
+            entries.add(new EditorMenu.Entry(CampaignEditor.i18n("session_levels"), this::openLevels));
+        entries.add(new EditorMenu.Entry(CampaignEditor.i18n("test_level"), this::chooseTestDifficulty));
+        if (session == null)
+            entries.add(new EditorMenu.Entry(CampaignEditor.i18n("campaign_levels"), this::backToCampaign));
+        if (session == null && EditorSession.canHost())
+            entries.add(new EditorMenu.Entry(MapEditor.i18n("session_share"), this::share));
+        entries.add(new EditorMenu.Entry(MapEditor.i18n("exit_editor"), this::exit));
+        getGUIRoot().addModalForm(new EditorMenu(CampaignEditor.i18n("editor_headline"), entries));
     }
 
     private void save() {
@@ -1428,8 +1517,20 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             after.run();
     }
 
-    /** Points out what would spoil the level before testing it, and tests it if asked to anyway. */
+    /**
+     * Points out what would spoil the level before testing it, and tests it if asked to anyway. Testing leaves a
+     * shared session, so that is asked first.
+     */
     private void chooseTestDifficulty() {
+        if (session != null) {
+            getGUIRoot().addModalForm(new QuestionForm(CampaignEditor.i18n("session_test_confirm"),
+                    (_, _, _, _) -> checkThenTest()));
+            return;
+        }
+        checkThenTest();
+    }
+
+    private void checkThenTest() {
         List<String> problems = Objects.requireNonNull(campaign).getScenario().problems();
         if (problems.isEmpty()) {
             showTestDifficulties();
@@ -1456,6 +1557,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
      * game is over.
      */
     private void test(int difficulty) {
+        EditorSession shared = session;
+        if (shared != null) {
+            endSession();
+            shared.leave();
+        }
         CampaignSession level_session = Objects.requireNonNull(campaign).getSession();
         Path dir = Objects.requireNonNull(CampaignEditor.getCampaignsDir());
         int level = level_session.level;
@@ -1490,8 +1596,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     private void exit() {
         if (session != null) {
-            getGUIRoot().addModalForm(new QuestionForm(MapEditor.i18n("session_exit_confirm"), (_, _, _,
-                    _) -> leave()));
+            getGUIRoot().addModalForm(new QuestionForm(campaign != null ? CampaignEditor.i18n(
+                    "session_exit_confirm") : MapEditor.i18n("session_exit_confirm"), (_, _, _, _) -> leave()));
         } else if (isModified()) {
             getGUIRoot().addModalForm(new QuestionForm(campaign != null ? CampaignEditor.i18n("exit_confirm")
                     : MapEditor.i18n("exit_confirm"), (_, _, _, _) -> leave()));
@@ -1523,10 +1629,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     // ---- Shared sessions ----
 
-    /** Opens a session on this island, for others to join from the multiplayer menu's map editing tab. */
+    /**
+     * Opens a session on this island, for others to join from the multiplayer menu's map editing tab: a campaign
+     * session when editing a campaign's level.
+     */
     void hostSession(@NonNull String name) {
         SessionSync new_sync = startSync();
-        EditorSession opened = EditorSession.host(name, settings, new SessionEditor(), editor.getSize());
+        EditorSession opened = EditorSession.host(name, settings, new SessionEditor(), campaign != null);
         if (opened == null) {
             endSession();
             getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("shared_not_connected")));
@@ -1535,23 +1644,45 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         session = opened;
         sync = new_sync;
         session_live = true;
-        getGUIRoot().getInfoPrinter().print(MapEditor.i18n("session_opened", name));
+        getGUIRoot().getInfoPrinter().print(MapEditor.i18n(campaign != null ? "session_opened_campaign"
+                : "session_opened", name));
     }
 
     /** Takes part in the session this island was handed over from, laying over it what was edited since. */
     void joinSession(@NonNull EditorSession joined) {
-        startSync();
-        session = joined;
-        joined.attach(new SessionEditor(), editor.getSize());
-        if (session != null) {
-            session_live = true;
+        if (attachSession(joined))
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("session_joined", joined.getName()));
+    }
+
+    /** Goes on with a campaign session on the level everyone moved on to. */
+    void continueSession(@NonNull EditorSession joined) {
+        if (attachSession(joined) && campaign != null) {
+            CampaignSession level_session = campaign.getSession();
+            getGUIRoot().getInfoPrinter().print(CampaignEditor.i18n("session_level_now", level_session.level + 1,
+                    level_session.getLevel().scenario.title));
         }
     }
 
-    /** From the editor menu: opens a session on the island as it is, named after it. */
+    /** From the editor menu: opens a session on the island or the campaign as it is, named after it. */
     private void share() {
+        if (campaign != null) {
+            String name = campaign.getSession().file.name;
+            hostSession(!name.isBlank() ? name : CampaignEditor.i18n("session_default_name",
+                    EditorSession.localNick()));
+            return;
+        }
         hostSession(map_name != null ? map_name : MapEditor.i18n("session_default_name", EditorSession.localNick()));
+    }
+
+    /** @return whether the session is still under way */
+    private boolean attachSession(@NonNull EditorSession joined) {
+        startSync();
+        session = joined;
+        joined.attach(new SessionEditor());
+        if (session == null)
+            return false;
+        session_live = true;
+        return true;
     }
 
     private @NonNull SessionSync startSync() {
@@ -1586,6 +1717,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }, editor.getSize());
         sync = new_sync;
         link.set(new_sync);
+        scenario_sync = campaign != null ? new ScenarioSync(campaign.getLayer()) : null;
         RemoteEditors others = new RemoteEditors(this, editor.getSize());
         others.setRosterTop(rosterTop());
         remotes = others;
@@ -1599,14 +1731,24 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private void endSession() {
         session = null;
         session_live = false;
+        moving = false;
         sync = null;
+        scenario_sync = null;
         link.set(null);
+        if (campaign != null)
+            campaign.getScenario().setIdSlot(-1);
+        closeChat();
         RemoteEditors others = remotes;
         remotes = null;
         if (others != null) {
             others.clear();
             others.close();
         }
+    }
+
+    /** The campaign level shown, which a campaign session's edits name; 0 in a map session. */
+    private int currentLevel() {
+        return campaign != null ? campaign.getSession().level : 0;
     }
 
     /** Sends this player's edits and whereabouts now and then, and eases the others' cameras along. */
@@ -1637,15 +1779,125 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
     }
 
-    /** Sends what this player changed since the last time as an edit, if anything, and waits longer after a big one. */
+    /**
+     * Sends what this player changed since the last time as edits, the island's and the level's, if anything, and
+     * waits longer after a big one.
+     */
     private void sendEdits() {
         send_timer = 0f;
         EditorSession current = session;
         SessionSync current_sync = sync;
-        if (current == null || current_sync == null)
+        // Once everyone is asked to move on, nothing more goes out for this level.
+        if (current == null || current_sync == null || moving)
             return;
+        int sent = 0;
         EditOp op = current_sync.take();
-        send_interval = op == null ? SEND_INTERVAL : Math.max(SEND_INTERVAL, current.sendEdit(op) / SEND_RATE);
+        if (op != null)
+            sent += current.sendEdit(SessionMessage.encode(SessionMessage.TERRAIN, currentLevel(), op.encode()));
+        ScenarioSync objects = scenario_sync;
+        ScenarioSync.Op scenario_op = objects != null ? objects.take() : null;
+        if (scenario_op != null)
+            sent += current.sendEdit(SessionMessage.encode(SessionMessage.SCENARIO, currentLevel(),
+                    scenario_op.encode()));
+        send_interval = Math.max(SEND_INTERVAL, sent / SEND_RATE);
+    }
+
+    // ---- Campaign levels in a session ----
+
+    /** The level list of a campaign session, to move everyone to another level or add one. */
+    private void openLevels() {
+        CampaignSession level_session = Objects.requireNonNull(campaign).getSession();
+        getGUIRoot().addModalForm(new SessionLevelsForm(getGUIRoot(), level_session, this::requestLevel,
+                () -> getGUIRoot().addModalForm(new MapEditorForm(network, getGUIRoot(), this::requestNewLevel))));
+    }
+
+    /** Asks everyone to go on to a level as this player has it; this player goes too once the server orders it. */
+    private void requestLevel(int index) {
+        CampaignSession level_session = Objects.requireNonNull(campaign).getSession();
+        if (index == level_session.level || index < 0 || index >= level_session.file.levels.size())
+            return;
+        requestMove(SessionMessage.SWITCH_LEVEL, index, level_session.file.levels.get(index));
+    }
+
+    /** Asks everyone to add a level on an island and go on to it. */
+    private void requestNewLevel(@NonNull MapFile island) {
+        CampaignSession level_session = Objects.requireNonNull(campaign).getSession();
+        int index = level_session.file.levels.size();
+        requestMove(SessionMessage.ADD_LEVEL, index, CampaignFile.Level.of(island,
+                CampaignEditor.i18n("level_default_title", index + 1)));
+    }
+
+    private void requestMove(byte kind, int index, CampaignFile.@NonNull Level level) {
+        EditorSession current = session;
+        if (current == null || moving)
+            return;
+        cancelStroke();
+        // What this player did here goes out first, so everyone has it when they move on.
+        if (sync != null)
+            sync.changedAnywhere();
+        sendEdits();
+        byte[] data;
+        try {
+            data = CampaignFile.levelToBytes(level);
+        } catch (IOException e) {
+            getGUIRoot().addModalForm(new MessageForm(CampaignEditor.i18n("session_level_failed",
+                    String.valueOf(e.getMessage()))));
+            return;
+        }
+        moving = true;
+        current.sendEdit(SessionMessage.encode(kind, index, data));
+        getGUIRoot().getInfoPrinter().print(CampaignEditor.i18n("session_moving"));
+    }
+
+    /** A move of everyone to another level, or to a new one, as a {@link SessionMessage} carries it. */
+    private record LevelMove(byte kind, int index, byte @NonNull [] level) {
+    }
+
+    /**
+     * Everyone goes on to another level, or to a new one: this one is kept in the campaign as it is, the level comes
+     * in as the player moving everyone has it, and the editor opens on it with the session going on. The session was
+     * detached when the move came in.
+     */
+    private void moveTo(@NonNull LevelMove move) {
+        CampaignTools tools = campaign;
+        EditorSession current = session;
+        if (tools == null || current == null)
+            return;
+        CampaignSession level_session = tools.getSession();
+        List<CampaignFile.Level> levels = level_session.file.levels;
+        int index = move.index();
+        CampaignFile.Level level = null;
+        try {
+            level = CampaignFile.levelFromBytes(move.level());
+        } catch (IOException e) {
+            IO.println("Could not read the level everyone moved to: " + e);
+        }
+        boolean add = move.kind() == SessionMessage.ADD_LEVEL;
+        boolean known = index >= 0 && index < levels.size();
+        // A level that could not be read is gone to as this player has it, so as not to fall behind the others; one
+        // this player does not have cannot be.
+        if (add ? level == null : !known) {
+            endSession();
+            current.leave();
+            getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("session_ended",
+                    CampaignEditor.i18n("session_level_lost"))));
+            return;
+        }
+        storeLevel(tools);
+        if (add && !known) {
+            index = levels.size();
+            levels.add(Objects.requireNonNull(level));
+        } else if (level != null) {
+            // A switch brings the level as its sender has it. A new level whose number another player's new level
+            // got first takes that one's place, as it does for everyone.
+            levels.set(index, level);
+        }
+        level_session.markModified();
+        level_session.level = index;
+        endSession();
+        closeEditor();
+        ProgressForm.setProgressForm(network, getGUIRoot().getGUI(), new MapEditorLoader(network, level_session,
+                new MapEditorLoader.SessionStart.Continue(current)));
     }
 
     /** What the session tells this editor. */
@@ -1656,6 +1908,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             boolean self = current != null && slot == current.getSlot();
             if (remotes != null)
                 remotes.memberJoined(slot, nick, self);
+            // The ids this player makes for the level's objects, areas and triggers are theirs alone.
+            if (self && campaign != null)
+                campaign.getScenario().setIdSlot(slot);
             // Those already there when this player joined are only listed.
             if (!self && session_live)
                 getGUIRoot().getInfoPrinter().print(MapEditor.i18n("session_member_joined", nick));
@@ -1669,7 +1924,38 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
 
         @Override
-        public void edited(int slot, @NonNull EditOp op) {
+        public void received(int slot, byte @NonNull [] message) {
+            try {
+                byte kind = SessionMessage.kind(message);
+                int level = SessionMessage.level(message);
+                switch (kind) {
+                    case SessionMessage.TERRAIN -> {
+                        if (level == currentLevel())
+                            edited(slot, EditOp.decode(SessionMessage.payload(message), editor.getSize()));
+                    }
+                    case SessionMessage.SCENARIO -> {
+                        ScenarioSync objects = scenario_sync;
+                        if (objects != null && level == currentLevel())
+                            objects.apply(ScenarioSync.Op.decode(SessionMessage.payload(message)));
+                    }
+                    case SessionMessage.SWITCH_LEVEL, SessionMessage.ADD_LEVEL -> {
+                        EditorSession current = session;
+                        if (campaign == null || current == null)
+                            break;
+                        // What comes after it is for the next level, so it waits in the session; the move itself
+                        // happens on the next frame, as this may be the editor still being built.
+                        current.detach();
+                        moving = true;
+                        next_level = new LevelMove(kind, level, SessionMessage.payload(message));
+                    }
+                    default -> IO.println("Dropping an edit of unknown kind " + kind + " from slot " + slot);
+                }
+            } catch (IOException | RuntimeException e) {
+                IO.println("Dropping an edit from slot " + slot + " that could not be read: " + e);
+            }
+        }
+
+        private void edited(int slot, @NonNull EditOp op) {
             if (sync == null)
                 return;
             sync.apply(op);
@@ -1682,9 +1968,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
 
         @Override
-        public void acknowledged() {
-            if (sync != null)
+        public void acknowledged(byte kind) {
+            if (kind == SessionMessage.TERRAIN && sync != null)
                 sync.acknowledged();
+            else if (kind == SessionMessage.SCENARIO && scenario_sync != null)
+                scenario_sync.acknowledged();
         }
 
         @Override
@@ -1700,8 +1988,21 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             if (sync != null)
                 sync.changedAnywhere();
             sendEdits();
+            CampaignTools tools = campaign;
+            if (tools != null) {
+                CampaignSession level_session = tools.getSession();
+                CampaignFile.Level stored = level_session.getLevel();
+                return level_session.file.toSharedBytes(level_session.level, new CampaignFile.Level(settings,
+                        editor.copyHeights(), currentResources(), stored.preview, tools.getScenario()));
+            }
             return new MapFile(map_name != null ? map_name : "", settings, editor.copyHeights(), currentResources(),
                     null, description).toBytes();
+        }
+
+        @Override
+        public void chatted() {
+            if (chat_form != null)
+                chat_form.refresh();
         }
 
         @Override

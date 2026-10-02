@@ -121,4 +121,7 @@ public interface MatchmakingClientInterface {
 
     void receiveEditorPresence(int slot, float x, float y, float z, float horiz_angle, float vert_angle,
             float cursor_x, float cursor_y, float radius, int brush);
+
+    /** A chat message in the session, from the slot of the player who wrote it. */
+    void receiveEditorChat(int slot, String message);
 }

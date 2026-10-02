@@ -62,6 +62,10 @@ final class MapEditorLoader implements LoadCallback {
         /** Joins the session the island was handed over from. */
         record Join(@NonNull EditorSession session) implements SessionStart {
         }
+
+        /** Goes on with a campaign session on another of its levels, which everyone moved on to. */
+        record Continue(@NonNull EditorSession session) implements SessionStart {
+        }
     }
 
     MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings, @Nullable String map_name,
@@ -72,8 +76,14 @@ final class MapEditorLoader implements LoadCallback {
 
     /** Opens a campaign's level, its island with its tribes' units and buildings. */
     MapEditorLoader(@NonNull NetworkSelector network, @NonNull CampaignSession campaign_session) {
+        this(network, campaign_session, new SessionStart.None());
+    }
+
+    /** Opens a campaign's level, in a session shared with other players or going on to share one. */
+    MapEditorLoader(@NonNull NetworkSelector network, @NonNull CampaignSession campaign_session,
+            @NonNull SessionStart session) {
         this(network, campaign_session.getLevel().settings, null, "", campaign_session.getLevel().heights,
-                campaign_session.getLevel().resources, new SessionStart.None(), campaign_session);
+                campaign_session.getLevel().resources, session, campaign_session);
     }
 
     private MapEditorLoader(@NonNull NetworkSelector network, @NonNull MapSettings settings,
@@ -216,6 +226,7 @@ final class MapEditorLoader implements LoadCallback {
         switch (session) {
             case SessionStart.Host host -> delegate.hostSession(host.name());
             case SessionStart.Join join -> delegate.joinSession(join.session());
+            case SessionStart.Continue next -> delegate.continueSession(next.session());
             case SessionStart.None _ -> {
             }
         }
