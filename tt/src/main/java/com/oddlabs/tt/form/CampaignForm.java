@@ -13,6 +13,8 @@ import com.oddlabs.tt.gui.LoadCampaignBox;
 import com.oddlabs.tt.gui.MouseButton;
 import com.oddlabs.tt.gui.Origin;
 import com.oddlabs.tt.gui.Skin;
+import com.oddlabs.tt.mapeditor.CampaignEditor;
+import com.oddlabs.tt.mapeditor.CampaignEditorForm;
 import com.oddlabs.tt.mapeditor.CustomCampaign;
 import com.oddlabs.tt.guievent.RowListener;
 import com.oddlabs.tt.player.campaign.Campaign;
@@ -32,6 +34,7 @@ import java.util.logging.Logger;
 
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
 import static com.oddlabs.tt.gui.Placement.LEFT_MID;
+import static com.oddlabs.tt.gui.Placement.TOP_RIGHT;
 
 public final class CampaignForm extends Form implements DeterministicSerializerLoopbackInterface<@NonNull CampaignState[]> {
     private static final Logger logger = Logger.getLogger(CampaignForm.class.getSimpleName());
@@ -71,6 +74,10 @@ public final class CampaignForm extends Form implements DeterministicSerializerL
         HorizButton button_cancel = new CancelButton(120);
         button_cancel.addMouseClickListener((_, _, _, _) -> this.cancel());
 
+        HorizButton button_editor = new HorizButton(CampaignEditor.i18n("campaign_editor"), 150);
+        button_editor.addMouseClickListener((_, _, _, _) -> main_menu.setMenuCentered(new CampaignEditorForm(network,
+                gui_root, main_menu)));
+
         // Combo box
         RowListener<CampaignState> listListener = new RowListener<>() {
             @Override
@@ -99,10 +106,13 @@ public final class CampaignForm extends Form implements DeterministicSerializerL
         addChild(load_campaign_box);
         addChild(button_load);
         addChild(button_cancel);
+        addChild(button_editor);
 
         // Place objects
         headline.place();
         load_campaign_box.place(button_vikings, BOTTOM_LEFT);
+        // The campaign editor at the top right, level with the headline.
+        button_editor.place(load_campaign_box, TOP_RIGHT);
         button_cancel.place(Origin.AT_END);
         button_delete.place(button_cancel, LEFT_MID);
         button_load.place(button_delete, LEFT_MID);

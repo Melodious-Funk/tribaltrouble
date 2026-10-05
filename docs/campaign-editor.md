@@ -6,7 +6,7 @@ make it a story. Finished campaigns are played from **Campaign → New**, like t
 
 ## Making a campaign
 
-1. **Main menu → Campaign Editor.** Type a name and a description.
+1. **Main menu → Campaign → Campaign Editor** (top right). Type a name and a description.
 2. **Add level...** opens the island picker: choose the size, terrain and sliders, type a map code, or
    **Load...** a map saved in the map editor. **Add level** puts it at the end of the list.
 3. Order the levels with **Move up** / **Move down**. They are played in this order; each opens once the one
@@ -46,8 +46,9 @@ Pointing at an area or object shows its name and which triggers use it on the hi
 Picking for a trigger that wants a unit refuses a building or statue, and one that wants a tower or ship refuses
 anything else, saying why on the hint line.
 
-The **Esc menu** has **Save campaign**, **Test this level** (plays it at the difficulty you pick and comes back
-to the editor afterwards), **Back to campaign levels** and **Exit**.
+The **Esc menu** has **Save campaign**, **Save island as map...** (a copy of the level's island, terrain and
+resources, in your `maps` folder; the campaign itself is left unsaved), **Test this level** (plays it at the
+difficulty you pick and comes back to the editor afterwards), **Back to campaign levels** and **Exit**.
 
 ## Editing together
 
@@ -55,7 +56,7 @@ A campaign can be edited with other players, like a map in a shared map editing 
 multiplayer profile.
 
 - **Host:** in the campaign editor, **Esc menu → Edit together** shares the campaign you are editing. From the
-  **Shared sessions...** window on the multiplayer menu's Games tab, **Host session...** opens the island picker:
+  **Shared sessions...** window on the multiplayer menu's Maps tab, **Host session...** opens the island picker:
   tick **Campaign session** to start a new campaign on the island, or press **Host a saved campaign...** to share one
   you saved.
 - **Join:** campaign sessions show as *Campaign* in the **Kind** column of the **Shared sessions...** window. Joining

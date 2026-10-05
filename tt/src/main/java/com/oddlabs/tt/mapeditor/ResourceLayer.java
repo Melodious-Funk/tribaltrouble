@@ -306,21 +306,30 @@ final class ResourceLayer {
         finish();
     }
 
-    /** Takes back a stroke: removes what it placed and puts back what it removed. */
-    void undo(@NonNull Stroke stroke) {
+    /**
+     * Takes back a stroke: removes what it placed and puts back what it removed.
+     *
+     * @return what that changed, as a stroke whose undo redoes this one
+     */
+    @NonNull Stroke undo(@NonNull Stroke stroke) {
+        Stroke undone = new Stroke();
         for (int[] added : stroke.added) {
-            if (kinds[added[2] * size + added[1]] != null) {
+            Resource found = kinds[added[2] * size + added[1]];
+            if (found != null) {
                 remove(added[1], added[2]);
+                undone.removed.add(new int[]{found.ordinal(), added[1], added[2]});
                 changed(added[1], added[2]);
             }
         }
         for (int[] removed : stroke.removed) {
             if (kinds[removed[2] * size + removed[1]] == null) {
                 place(Resource.values()[removed[0]], removed[1], removed[2]);
+                undone.added.add(removed);
                 changed(removed[1], removed[2]);
             }
         }
         finish();
+        return undone;
     }
 
     /**

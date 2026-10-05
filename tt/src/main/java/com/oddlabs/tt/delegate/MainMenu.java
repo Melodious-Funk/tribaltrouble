@@ -11,8 +11,6 @@ import com.oddlabs.tt.form.TutorialForm;
 import com.oddlabs.tt.global.Settings;
 import com.oddlabs.tt.gui.GUIRoot;
 import com.oddlabs.tt.gui.MenuButton;
-import com.oddlabs.tt.mapeditor.CampaignEditor;
-import com.oddlabs.tt.mapeditor.CampaignEditorForm;
 import com.oddlabs.tt.mapeditor.MapEditor;
 import com.oddlabs.tt.mapeditor.MapEditorForm;
 import com.oddlabs.tt.net.Network;
@@ -48,12 +46,6 @@ public final class MainMenu extends Menu {
         MenuButton map_editor = new MenuButton(MapEditor.i18n("map_editor"), COLOR_NORMAL, COLOR_ACTIVE);
         map_editor.addMouseClickListener((_, _, _, _) -> setMenu(new MapEditorForm(getNetwork(), getGUIRoot())));
         addChild(map_editor);
-
-        MenuButton campaign_editor = new MenuButton(CampaignEditor.i18n("campaign_editor"), COLOR_NORMAL,
-                COLOR_ACTIVE);
-        campaign_editor.addMouseClickListener((_, _, _, _) -> setMenuCentered(new CampaignEditorForm(getNetwork(),
-                getGUIRoot(), MainMenu.this)));
-        addChild(campaign_editor);
 
         if (!Settings.getSettings().hide_multiplayer) {
             MenuButton multi_player = new MenuButton(Menu.i18n("multiplayer"), COLOR_NORMAL, COLOR_ACTIVE);

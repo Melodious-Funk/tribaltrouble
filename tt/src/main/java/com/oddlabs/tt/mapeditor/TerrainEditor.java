@@ -86,6 +86,8 @@ final class TerrainEditor {
     private final @NonNull FloatBuffer upload;
     private final float @NonNull [] @NonNull [] scratch;
     private final Deque<@NonNull UndoStep> undo_steps = new ArrayDeque<>();
+    // The heights undo took back, newest first, until the next stroke.
+    private final Deque<@NonNull UndoStep> redo_steps = new ArrayDeque<>();
 
     // Rectangle (inclusive) changed since the last flush.
     private int dirty_x0 = Integer.MAX_VALUE;
@@ -206,21 +208,41 @@ final class TerrainEditor {
         undo_steps.push(new UndoStep(stroke_x0, stroke_y0, saved));
         while (undo_steps.size() > MAX_UNDO_STEPS)
             undo_steps.removeLast();
+        redo_steps.clear();
         return true;
     }
 
     /** Restores the heights from before the last stroke. */
     boolean undo() {
         endStroke();
-        UndoStep step = undo_steps.poll();
+        return swap(undo_steps, redo_steps);
+    }
+
+    /** Lays again the heights the last undo took back. */
+    boolean redo() {
+        endStroke();
+        return swap(redo_steps, undo_steps);
+    }
+
+    /** Forgets what undo took back, as an edit made since leaves nothing to redo. */
+    void clearRedo() {
+        redo_steps.clear();
+    }
+
+    /** Lays the newest step of one stack, keeping the heights it replaced on the other. */
+    private boolean swap(@NonNull Deque<@NonNull UndoStep> from, @NonNull Deque<@NonNull UndoStep> to) {
+        UndoStep step = from.poll();
         if (step == null)
             return false;
-        for (int y = 0; y < step.heights().length; y++) {
-            float[] row = step.heights()[y];
-            System.arraycopy(row, 0, heights[step.y0() + y], step.x0(), row.length);
+        int w = step.heights()[0].length;
+        int h = step.heights().length;
+        float[][] replaced = new float[h][w];
+        for (int y = 0; y < h; y++) {
+            System.arraycopy(heights[step.y0() + y], step.x0(), replaced[y], 0, w);
+            System.arraycopy(step.heights()[y], 0, heights[step.y0() + y], step.x0(), w);
         }
-        markDirty(step.x0(), step.y0(), step.x0() + step.heights()[0].length - 1,
-                step.y0() + step.heights().length - 1);
+        to.push(new UndoStep(step.x0(), step.y0(), replaced));
+        markDirty(step.x0(), step.y0(), step.x0() + w - 1, step.y0() + h - 1);
         modified = true;
         flush();
         return true;
@@ -230,7 +252,7 @@ final class TerrainEditor {
 
     /**
      * Lays heights another player's edit brought, a row at a time, leaving a cell alone where its value is NaN. They
-     * go into what undo restores as well, so taking back an edit of this player's leaves theirs standing. They are
+     * go into what undo and redo restore as well, so taking back an edit of this player's leaves theirs standing. They are
      * not this player's edit, so neither mark the map modified nor join the stroke in progress.
      */
     void applyShared(int x0, int y0, int width, int height, float @NonNull [] values) {
@@ -245,6 +267,8 @@ final class TerrainEditor {
         if (backup != null)
             copyShared(backup, 0, 0, x0, y0, width, height, values);
         for (UndoStep step : undo_steps)
+            copyShared(step.heights(), step.x0(), step.y0(), x0, y0, width, height, values);
+        for (UndoStep step : redo_steps)
             copyShared(step.heights(), step.x0(), step.y0(), x0, y0, width, height, values);
         markShown(x0, y0, x0 + width - 1, y0 + height - 1);
     }

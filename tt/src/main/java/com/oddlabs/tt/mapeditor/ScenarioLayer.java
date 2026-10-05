@@ -418,26 +418,37 @@ final class ScenarioLayer implements ScenarioSync.Target {
         return changed;
     }
 
-    void undo(@NonNull Stroke stroke) {
+    /**
+     * Takes back a stroke: removes what it placed, puts back what it removed and returns areas to how they were.
+     *
+     * @return what that changed, as a stroke whose undo redoes this one
+     */
+    @NonNull Stroke undo(@NonNull Stroke stroke) {
+        Stroke undone = new Stroke();
         for (Scenario.Placement placement : stroke.added) {
             scenario.placements.remove(placement);
             occupy(placement, 0);
             hide(placement);
+            undone.removed.add(placement);
         }
         for (Scenario.Placement placement : stroke.removed) {
             scenario.placements.add(placement);
             occupy(placement, placement.id());
             show(placement);
+            undone.added.add(placement);
         }
         for (Map.Entry<Integer, Scenario.@Nullable Area> entry : stroke.areas_before.entrySet()) {
             Scenario.Area current = scenario.findArea(entry.getKey());
             Scenario.Area before = entry.getValue();
+            undone.areas_before.put(entry.getKey(), current != null ? new Scenario.Area(current.id, current.name,
+                    current.x, current.y, current.radius) : null);
             if (current != null)
                 scenario.areas.remove(current);
             if (before != null)
                 scenario.areas.add(before);
         }
         touched();
+        return undone;
     }
 
     // ---- Shared sessions ----

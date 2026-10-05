@@ -36,7 +36,7 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_TOP;
 
 /**
  * The multiplayer menu's tab of maps players have shared: browse them with their previews, download one to play
- * or edit, upload one of your own, or take one of yours off the server.
+ * or edit, upload one of your own, or take one of yours off the server. It also opens the shared map editor sessions.
  */
 public final class MapBrowserPanel extends Panel {
     // With the preview beside it, as wide as the games tab's list.
@@ -62,8 +62,11 @@ public final class MapBrowserPanel extends Panel {
     private @Nullable String reselect;
     private @Nullable SharedMap shown;
 
-    /** @param list_height the height of the list, to line up with the other tabs' lists */
-    public MapBrowserPanel(@NonNull GUIRoot gui_root, int list_height) {
+    /**
+     * @param list_height the height of the list, to line up with the other tabs' lists
+     * @param open_sessions opens the window of shared map editor sessions
+     */
+    public MapBrowserPanel(@NonNull GUIRoot gui_root, int list_height, @NonNull Runnable open_sessions) {
         super(MapEditor.i18n("shared_caption"));
         this.gui_root = gui_root;
         Label label_headline = new Label(MapEditor.i18n("shared_headline"), Skin.getSkin().getHeadlineFont());
@@ -117,6 +120,8 @@ public final class MapBrowserPanel extends Panel {
                 gui_root.addModalForm(new QuestionForm(MapEditor.i18n("shared_delete_confirm", selected.getName()),
                         (_, _, _, _) -> delete(selected)));
         });
+        HorizButton button_sessions = new HorizButton(MapEditor.i18n("sessions_button"), BUTTON_WIDTH_LONG);
+        button_sessions.addMouseClickListener((_, _, _, _) -> open_sessions.run());
 
         addChild(label_headline);
         addChild(list);
@@ -129,6 +134,7 @@ public final class MapBrowserPanel extends Panel {
         addChild(button_upload);
         addChild(button_download);
         addChild(button_delete);
+        addChild(button_sessions);
         label_headline.place();
         list.place(label_headline, BOTTOM_LEFT);
         view.place(list, RIGHT_TOP);
@@ -140,6 +146,7 @@ public final class MapBrowserPanel extends Panel {
         button_upload.place(button_update, RIGHT_MID);
         button_download.place(button_upload, RIGHT_MID);
         button_delete.place(button_update, BOTTOM_LEFT);
+        button_sessions.place(button_delete, RIGHT_MID);
         compileCanvas();
         show(null);
 

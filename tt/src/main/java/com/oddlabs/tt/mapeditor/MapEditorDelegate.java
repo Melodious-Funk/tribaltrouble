@@ -140,6 +140,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private final @NonNull ResourceLayer layer;
     // Terrain steps and resource strokes, newest first, so undo takes them back in the order they were made.
     private final Deque<Object> history = new ArrayDeque<>();
+    // What undo took back, newest first, as steps whose undo puts it back; emptied by the next edit.
+    private final Deque<Object> redo_history = new ArrayDeque<>();
     private ResourceLayer.@Nullable Stroke resource_stroke;
     // Resources the latest terrain edit left off the playable area; kept with it in the history until the next edit
     // or an undo, as the playable area catches up with an edit after the stroke ends.
@@ -351,6 +353,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             undo();
             setFocus();
         });
+        HorizButton button_redo = new HorizButton(MapEditor.i18n("redo"), 80);
+        button_redo.addMouseClickListener((_, _, _, _) -> {
+            redo();
+            setFocus();
+        });
         HorizButton button_menu = new HorizButton(MapEditor.i18n("menu"), 80);
         button_menu.addMouseClickListener((_, _, _, _) -> openMenu());
         // Wide enough for the longest hint, as a label clips what does not fit.
@@ -367,6 +374,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         toolbar.addChild(check_wireframe);
         toolbar.addChild(group_overlay);
         toolbar.addChild(button_undo);
+        toolbar.addChild(button_redo);
         toolbar.addChild(button_menu);
         toolbar.addChild(label_hint);
         toolbar.addChild(label_controls);
@@ -375,7 +383,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         label_radius.place(check_natural, RIGHT_MID, 20);
         label_intensity.place(label_radius, RIGHT_MID);
         button_undo.place(label_intensity, RIGHT_MID, 20);
-        button_menu.place(button_undo, RIGHT_MID);
+        button_redo.place(button_undo, RIGHT_MID);
+        button_menu.place(button_redo, RIGHT_MID);
         label_hint.place(group_terrain, BOTTOM_LEFT);
         label_controls.place(label_hint, BOTTOM_LEFT);
         check_trees.place(label_hint, RIGHT_MID);
@@ -696,9 +705,15 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
 
     @Override
     public void remember(@NonNull Object step) {
-        history.push(step);
-        while (history.size() > TerrainEditor.MAX_UNDO_STEPS)
-            history.removeLast();
+        keep(history, step);
+        redo_history.clear();
+        editor.clearRedo();
+    }
+
+    private static void keep(@NonNull Deque<Object> steps, @NonNull Object step) {
+        steps.push(step);
+        while (steps.size() > TerrainEditor.MAX_UNDO_STEPS)
+            steps.removeLast();
     }
 
     private void beginTerrainStroke() {
@@ -998,40 +1013,66 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     }
 
     private void undo() {
-        cancelStroke();
-        ground_settle = true;
-        Object step = history.poll();
-        pruned = null;
-        pruned_objects = null;
-        if (step instanceof ResourceLayer.Stroke stroke) {
-            layer.undo(stroke);
-            resources_modified = true;
-        } else if (step instanceof ScenarioLayer.Stroke objects && campaign != null) {
-            campaign.getLayer().undo(objects);
-        } else if (step instanceof TerrainStep terrain) {
-            undoTerrain(terrain);
-        } else if (step instanceof PasteStep paste) {
-            // What it placed goes first, so what it cleared comes back on the ground it stood on.
-            layer.undo(paste.resources());
-            resources_modified = true;
-            if (paste.terrain() != null)
-                undoTerrain(paste.terrain());
-        } else {
-            getGUIRoot().getInfoPrinter().print(MapEditor.i18n("nothing_to_undo"));
-        }
+        takeBack(history, redo_history, false, "nothing_to_undo");
     }
 
-    private void undoTerrain(@NonNull TerrainStep terrain) {
-        if (!editor.undo())
-            return;
-        // Their cells rejoin the playable area with the heights, so they are not pruned again.
-        if (!terrain.pruned().isEmpty()) {
-            layer.undo(terrain.pruned());
+    private void redo() {
+        takeBack(redo_history, history, true, "nothing_to_redo");
+    }
+
+    /**
+     * Takes back the newest step of one history and keeps what that changed on the other, so it can be taken back
+     * in turn. Resources and objects are taken back the same way either way, as a step whose undo puts back what
+     * was there; the terrain editor keeps the heights itself, on stacks of its own.
+     *
+     * @param redo whether the step is one undo kept, so its heights are laid again rather than taken back
+     */
+    private void takeBack(@NonNull Deque<Object> from, @NonNull Deque<Object> to, boolean redo,
+            @NonNull String nothing_key) {
+        cancelStroke();
+        ground_settle = true;
+        Object step = from.poll();
+        pruned = null;
+        pruned_objects = null;
+        Object undone = null;
+        if (step instanceof ResourceLayer.Stroke stroke) {
+            undone = layer.undo(stroke);
+            resources_modified = true;
+        } else if (step instanceof ScenarioLayer.Stroke objects && campaign != null) {
+            undone = campaign.getLayer().undo(objects);
+        } else if (step instanceof TerrainStep terrain) {
+            undone = takeBackTerrain(terrain, redo);
+        } else if (step instanceof PasteStep paste) {
+            // Undone, what it placed goes first, so what it cleared comes back on the ground it stood on; redone,
+            // the heights come first, for the resources to stand on.
+            TerrainStep terrain = redo && paste.terrain() != null ? takeBackTerrain(paste.terrain(), true) : null;
+            ResourceLayer.Stroke resources = layer.undo(paste.resources());
+            resources_modified = true;
+            if (!redo && paste.terrain() != null)
+                terrain = takeBackTerrain(paste.terrain(), false);
+            undone = new PasteStep(terrain, resources);
+        } else {
+            getGUIRoot().getInfoPrinter().print(MapEditor.i18n(nothing_key));
+        }
+        if (undone != null)
+            keep(to, undone);
+    }
+
+    /** @return what was taken back, as a step that puts it back, or null if the heights were not there to take */
+    private @Nullable TerrainStep takeBackTerrain(@NonNull TerrainStep terrain, boolean redo) {
+        if (!(redo ? editor.redo() : editor.undo()))
+            return null;
+        // Undone, their cells rejoin the playable area with the heights, so they are not pruned again; redone, they
+        // leave it again.
+        ResourceLayer.Stroke resources = terrain.pruned();
+        if (!resources.isEmpty()) {
+            resources = layer.undo(resources);
             resources_modified = true;
         }
         ScenarioLayer.Stroke objects = terrain.pruned_objects();
         if (objects != null && !objects.isEmpty() && campaign != null)
-            campaign.getLayer().undo(objects);
+            objects = campaign.getLayer().undo(objects);
+        return new TerrainStep(resources, objects);
     }
 
     // ---- Mouse and keys ----
@@ -1157,6 +1198,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             return;
         if (event.getPhase() == InputPhase.PRESSED && !map_mode) {
             if (moving && (event.isControlDown() || event.getKeyCode() == Key.RETURN)) {
+                event.consume();
+                return;
+            }
+            if (event.isControlDown() && (event.getKeyCode() == Key.Y || (event.getKeyCode() == Key.Z
+                    && isShiftDown()))) {
+                redo();
                 event.consume();
                 return;
             }
@@ -1418,7 +1465,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (getGUIRoot().getModalDelegate() != null)
             return;
         if (campaign == null) {
-            getGUIRoot().addModalForm(new EditorMenu(this::save, this::exit,
+            getGUIRoot().addModalForm(new EditorMenu(() -> saveMap(false), this::exit,
                     session == null && EditorSession.canHost() ? this::share : null));
             return;
         }
@@ -1426,6 +1473,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         entries.add(new EditorMenu.Entry(MapEditor.i18n("resume"), () -> {
         }));
         entries.add(new EditorMenu.Entry(CampaignEditor.i18n("save_campaign"), () -> saveCampaign(null)));
+        entries.add(new EditorMenu.Entry(CampaignEditor.i18n("save_level_map"), () -> saveMap(true)));
         // In a session the levels are gone through together, without leaving the editor.
         if (session != null)
             entries.add(new EditorMenu.Entry(CampaignEditor.i18n("session_levels"), this::openLevels));
@@ -1438,13 +1486,25 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         getGUIRoot().addModalForm(new EditorMenu(CampaignEditor.i18n("editor_headline"), entries));
     }
 
-    private void save() {
+    /**
+     * Saves the island as a map, asking for its name.
+     *
+     * @param copy whether to save a copy and leave what is edited as it was, as for a campaign's level: that is only
+     *        saved with its campaign
+     */
+    private void saveMap(boolean copy) {
         Path dir = MapEditor.getMapsDir();
         if (dir == null) {
             getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("no_maps_dir")));
             return;
         }
-        getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), dir, map_name != null ? map_name : "", description,
+        String initial_name = map_name != null ? map_name : "";
+        if (copy && campaign != null) {
+            // Named after the level, as long as a map's name can be.
+            String title = campaign.getScenario().title;
+            initial_name = title.substring(0, Math.min(title.length(), MapFile.getMaxNameLength())).trim();
+        }
+        getGUIRoot().addModalForm(new SaveMapDialog(getGUIRoot(), dir, initial_name, copy ? "" : description,
                 (name, new_description) -> {
             boolean keep_heights = edited || editor.isModified();
             MapFile.Resources current = currentResources();
@@ -1456,6 +1516,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                         preview, new_description).save(dir);
             } catch (IOException e) {
                 getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("save_failed", e.getMessage())));
+                return;
+            }
+            if (copy) {
+                getGUIRoot().getInfoPrinter().print(MapEditor.i18n("saved", name));
                 return;
             }
             map_name = name;

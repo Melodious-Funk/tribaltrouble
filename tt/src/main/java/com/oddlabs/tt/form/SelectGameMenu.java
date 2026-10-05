@@ -2,7 +2,6 @@ package com.oddlabs.tt.form;
 
 import static com.oddlabs.tt.gui.Origin.AT_END;
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
-import static com.oddlabs.tt.gui.Placement.BOTTOM_RIGHT;
 import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
 
 import java.util.ArrayList;
@@ -51,7 +50,6 @@ import com.oddlabs.tt.guievent.ItemChosenListener;
 import com.oddlabs.tt.guievent.MouseClickListener;
 import com.oddlabs.tt.guievent.RowListener;
 import com.oddlabs.tt.mapeditor.EditorSessionsForm;
-import com.oddlabs.tt.mapeditor.MapEditor;
 import com.oddlabs.tt.mapeditor.MapBrowserPanel;
 import com.oddlabs.tt.mapeditor.MapEditorForm;
 import com.oddlabs.tt.net.ChatCommand;
@@ -170,10 +168,6 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
             joinGame(selected_game);
         });
 
-        HorizButton sessions_button = new HorizButton(MapEditor.i18n("sessions_button"), BUTTON_WIDTH_LONG);
-        game_list_panel.addChild(sessions_button);
-        sessions_button.addMouseClickListener((_, _, _, _) -> openEditorSessions());
-
         // Place game panel objects
         label_headline.place();
         game_list_box.place(label_headline, BOTTOM_LEFT);
@@ -181,7 +175,6 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         update_list_button.place(game_list_box, BOTTOM_LEFT);
         create_button.place(update_list_button, RIGHT_MID);
         join_button.place(create_button, RIGHT_MID);
-        sessions_button.place(game_list_box, BOTTOM_RIGHT);
 
         game_list_panel.compileCanvas();
         panels[PANEL_INDEX_GAME] = game_list_panel;
@@ -277,7 +270,7 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         chat_room_list_panel.compileCanvas();
 
         // Shared maps panel
-        map_browser = new MapBrowserPanel(gui_root, 350);
+        map_browser = new MapBrowserPanel(gui_root, 350, this::openEditorSessions);
         panels[PANEL_INDEX_MAPS] = map_browser;
 
         // Common
