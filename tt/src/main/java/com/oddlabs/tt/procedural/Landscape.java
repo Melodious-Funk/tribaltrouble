@@ -93,6 +93,8 @@ public final class Landscape {
     private Channel slope;
     private Channel water_map;
     private Channel deep_water_map;
+    // Whether the heights come from a saved map rather than the generator.
+    private boolean saved_heights;
     private Channel dock_map;
     private Channel island_ids;
     private Channel access;
@@ -768,6 +770,7 @@ public final class Landscape {
                 height.putPixel(x, y, edge ? 0f : meters[y][x] / height_scale);
             }
         }
+        saved_heights = true;
         deriveTerrainMaps();
     }
 
@@ -1342,11 +1345,12 @@ public final class Landscape {
         }
         if (spawns != null)
             placeAtSpawns(targets, spawns, angle, radius);
+        Channel ship_water = shipWater();
         for (int i = 0; i < num_players; i++) {
             int x = targets[i][0];
             int y = targets[i][1];
             if (archipelago) {
-                var loc = deep_water_map.find(unit_grids_per_world >> 1, x, y, 1f);
+                var loc = ship_water.find(unit_grids_per_world >> 1, x, y, 1f);
                 for (int u = 0; u < initial_unit_count; u++) {
                     player_locations[i][2 * u] = (loc[0] * scale);
                     player_locations[i][2 * u + 1] = (loc[1] * scale);
@@ -1356,8 +1360,8 @@ public final class Landscape {
                 int[] shore = null;
                 boolean spawned = spawns != null && i < spawns.length && spawns[i] != null;
                 if (spawned && height.getPixel(x, y) <= Globals.SEA_LEVEL) {
-                    int[] deep = water_map.getPixel(x, y) > .5f ? deep_water_map.find(unit_grids_per_world >> 1, x,
-                            y, 1f) : null;
+                    int[] deep = water_map.getPixel(x, y) > .5f ? ship_water.find(unit_grids_per_world >> 1, x, y,
+                            1f) : null;
                     if (deep != null && deep[0] >= 0)
                         ship_locations[i] = new float[]{deep[0] * scale, deep[1] * scale};
                     int[] found = access.findNoWrap(unit_grids_per_world >> 1, x, y, 1f);
@@ -1415,6 +1419,18 @@ public final class Landscape {
             player_locations[unspawned.get(k)] = player_locations_list.get(k);
     }
 
+
+    /**
+     * The deep water ships may start on. The sea's regions are built from the corner through deep water alone, so on
+     * a saved map, where a deep bay can lie behind a strait too shallow to count as deep, only the deep water joined to
+     * the corner will do: ships started in the bay would have no region and could never move. A generated island
+     * keeps all of its deep water, as before.
+     */
+    private @NonNull Channel shipWater() {
+        if (!saved_heights || deep_water_map.getPixel(0, 0) < .5f)
+            return deep_water_map;
+        return deep_water_map.copy().floodfill(0, 0, -1f, 0.1f, null, null).threshold(-1.01f, -0.99f);
+    }
 
     /**
      * Puts the players with a spawn at it, and those without at the places on the ring farthest from the spawns and

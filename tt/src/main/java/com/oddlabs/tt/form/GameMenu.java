@@ -127,7 +127,11 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
         team_buttons = (PulldownButton<Void>[]) new PulldownButton[player_count];
         ready_marks = new Diode[player_count];
         ratings = new Label[player_count];
-        Group player_group = player_count > DEFAULT_PLAYER_COUNT ? new ScrollableGroup(170, 64) : new Group();
+        String map_hash = game.getCustomMapHash();
+        // A shared map's preview goes to the right of the players, so their scroll bar keeps close to the ready marks.
+        int scroll_bar_margin = map_hash != null ? Skin.getSkin().getFormData().objectSpacing() : 64;
+        Group player_group = player_count > DEFAULT_PLAYER_COUNT ? new ScrollableGroup(170,
+                scroll_bar_margin) : new Group();
         GUIObject previous = null;
         for (int i = 0; i < player_count; i++) {
             previous = createPlayerPulldown(gui_root, player_group, previous, slot_buttons, race_buttons, team_buttons,
@@ -184,11 +188,12 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
         ready_button.place(cancel_button, LEFT_MID);
         if (local_player_slot == 0)
             start_button.place(ready_button, LEFT_MID);
-        String map_hash = game.getCustomMapHash();
         if (map_hash != null) {
-            // Beside the players, in the room above the chat.
+            // Beside the players, in the room above the chat and to the right of them and their scroll bar.
             int room = game_name_label.getHeight() + fdata.objectSpacing() + player_group.getHeight();
-            SharedMapView map_view = new SharedMapView(Math.min(160, SharedMapView.previewSizeFor(room)));
+            int beside = width - player_group.getWidth() - fdata.objectSpacing();
+            SharedMapView map_view = new SharedMapView(Math.max(0, Math.min(Math.min(160, beside),
+                    SharedMapView.previewSizeFor(room))));
             addChild(map_view);
             map_view.place(chat_info, TOP_RIGHT);
             String map_name = game.getCustomMapName();

@@ -52,6 +52,8 @@ public final class MapEditorForm extends Form {
     private final @NonNull Slider slider_trees;
     private final @NonNull Slider slider_supplies;
     private final @NonNull Label label_mapcode;
+    // The map code in a smaller font, for a code too long for the line in the headline font.
+    private final @NonNull Label label_mapcode_small;
     private final @NonNull Label label_map;
     private final @NonNull HorizButton button_start;
     // Where to go back to when hosting from the multiplayer menu, and null when editing alone.
@@ -125,22 +127,31 @@ public final class MapEditorForm extends Form {
         slider_trees.addValueListener(value -> settingsChanged(settings.withTrees((int) value)));
         slider_supplies.addValueListener(value -> settingsChanged(settings.withSupplies((int) value)));
 
-        // Map code and the map being edited. The code gets a line of its own, wide enough for long ones.
+        // The window is as wide as the sliders and the rows above them, and what goes below keeps to that.
+        int content_width = Math.max(group_sliders.getWidth(), Math.max(group_size.getWidth(),
+                group_terrain.getWidth()));
+        int spacing = Skin.getSkin().getFormData().objectSpacing();
+
+        // Map code and the map being edited. The code gets a line of its own.
         Group group_code = new Group();
         Label label_code = new Label(MapEditor.terrainI18n("map_code"), Skin.getSkin().getEditFont());
-        label_mapcode = new Label("", Skin.getSkin().getHeadlineFont(), 500);
+        label_mapcode = new Label("", Skin.getSkin().getHeadlineFont(), content_width);
+        label_mapcode_small = new Label("", Skin.getSkin().getEditFont(), content_width);
         group_code.addChild(label_code);
         group_code.addChild(label_mapcode);
+        group_code.addChild(label_mapcode_small);
         label_code.place();
         label_mapcode.place(label_code, BOTTOM_LEFT);
+        label_mapcode_small.place(label_code, BOTTOM_LEFT);
         group_code.compileCanvas();
         addChild(group_code);
-        label_map = new Label("", Skin.getSkin().getEditFont(), 500);
+        label_map = new Label("", Skin.getSkin().getEditFont(), content_width);
         addChild(label_map);
 
-        // Buttons: map code, save and load, with start and cancel under them.
+        // Buttons: map code, save and load, as wide together as the sliders, with start and cancel under them.
         Group group_buttons = new Group();
-        HorizButton button_mapcode = new HorizButton(MapEditor.terrainI18n("enter_map_code"), 170);
+        HorizButton button_mapcode = new HorizButton(MapEditor.terrainI18n("enter_map_code"), Math.max(170,
+                content_width - 2 * BUTTON_WIDTH - 2 * spacing));
         button_mapcode.addMouseClickListener((_, _, _, _) -> gui_root.addModalForm(new MapcodeDialog(
                 settings.toMapcode(), this::applyMapcode)));
         HorizButton button_save = new HorizButton(MapEditor.i18n("save"), BUTTON_WIDTH);
@@ -276,8 +287,12 @@ public final class MapEditorForm extends Form {
     }
 
     private void refresh() {
+        String code = settings.toMapcode();
+        // A label keeps two pixels clear at its end.
+        boolean fits = Skin.getSkin().getHeadlineFont().getWidth(code) + 2 <= label_mapcode.getWidth();
         label_mapcode.clear();
-        label_mapcode.append(settings.toMapcode());
+        label_mapcode_small.clear();
+        (fits ? label_mapcode : label_mapcode_small).append(code);
         label_map.clear();
         label_map.append(map_name == null ? MapEditor.i18n("new_map") : MapEditor.i18n("current_map", map_name));
     }
