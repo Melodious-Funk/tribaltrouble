@@ -1650,7 +1650,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // ---- Shared sessions ----
 
     /**
-     * Opens a session on this island, for others to join from the multiplayer menu's map editing tab: a campaign
+     * Opens a session on this island, for others to join from the multiplayer menu's shared sessions: a campaign
      * session when editing a campaign's level.
      */
     void hostSession(@NonNull String name) {

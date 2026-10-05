@@ -143,14 +143,14 @@ public final class MapEditorForm extends Form {
         slider_trees.addValueListener(value -> settingsChanged(settings.withTrees((int) value)));
         slider_supplies.addValueListener(value -> settingsChanged(settings.withSupplies((int) value)));
 
-        // Map code and the map being edited
+        // Map code and the map being edited. The code gets a line of its own, wide enough for long ones.
         Group group_code = new Group();
         Label label_code = new Label(MapEditor.terrainI18n("map_code"), Skin.getSkin().getEditFont());
         label_mapcode = new Label("", Skin.getSkin().getHeadlineFont(), 500);
         group_code.addChild(label_code);
         group_code.addChild(label_mapcode);
         label_code.place();
-        label_mapcode.place(label_code, RIGHT_MID);
+        label_mapcode.place(label_code, BOTTOM_LEFT);
         group_code.compileCanvas();
         addChild(group_code);
         label_map = new Label("", Skin.getSkin().getEditFont(), 500);
@@ -174,7 +174,7 @@ public final class MapEditorForm extends Form {
             check_campaign = null;
         }
 
-        // Buttons: save and load sit to the left of start and cancel.
+        // Buttons: map code, save and load, with start and cancel under them.
         Group group_buttons = new Group();
         HorizButton button_mapcode = new HorizButton(MapEditor.terrainI18n("enter_map_code"), 170);
         button_mapcode.addMouseClickListener((_, _, _, _) -> gui_root.addModalForm(new MapcodeDialog(
@@ -193,11 +193,11 @@ public final class MapEditorForm extends Form {
         group_buttons.addChild(button_load);
         group_buttons.addChild(button_start);
         group_buttons.addChild(button_cancel);
-        button_cancel.place();
+        button_mapcode.place();
+        button_save.place(button_mapcode, RIGHT_MID);
+        button_load.place(button_save, RIGHT_MID);
+        button_cancel.place(button_load, BOTTOM_RIGHT);
         button_start.place(button_cancel, LEFT_MID);
-        button_load.place(button_start, LEFT_MID);
-        button_save.place(button_load, LEFT_MID);
-        button_mapcode.place(button_save, LEFT_MID);
         group_buttons.compileCanvas();
         addChild(group_buttons);
 

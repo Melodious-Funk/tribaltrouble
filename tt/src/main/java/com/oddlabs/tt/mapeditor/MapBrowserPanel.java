@@ -139,7 +139,7 @@ public final class MapBrowserPanel extends Panel {
         button_update.place(list, BOTTOM_LEFT);
         button_upload.place(button_update, RIGHT_MID);
         button_download.place(button_upload, RIGHT_MID);
-        button_delete.place(button_download, RIGHT_MID);
+        button_delete.place(button_update, BOTTOM_LEFT);
         compileCanvas();
         show(null);
 

@@ -55,10 +55,11 @@ A campaign can be edited with other players, like a map in a shared map editing 
 multiplayer profile.
 
 - **Host:** in the campaign editor, **Esc menu → Edit together** shares the campaign you are editing. From the
-  multiplayer menu's **Map Editing** tab, **Host session...** opens the island picker: tick **Campaign session** to
-  start a new campaign on the island, or press **Host a saved campaign...** to share one you saved.
-- **Join:** campaign sessions show as *Campaign* in the **Kind** column of the **Map Editing** tab. Joining hands
-  you the whole campaign, opened on the level being edited.
+  **Shared sessions...** window on the multiplayer menu's Games tab, **Host session...** opens the island picker:
+  tick **Campaign session** to start a new campaign on the island, or press **Host a saved campaign...** to share one
+  you saved.
+- **Join:** campaign sessions show as *Campaign* in the **Kind** column of the **Shared sessions...** window. Joining
+  hands you the whole campaign, opened on the level being edited.
 
 Everyone edits the same level. Terrain, resources, units, buildings, areas, triggers, the players' setup and the level's
 texts reach the others a few times a second. Each player's new objects, areas and triggers get ids of their own, so

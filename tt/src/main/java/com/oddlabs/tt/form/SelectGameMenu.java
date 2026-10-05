@@ -2,6 +2,7 @@ package com.oddlabs.tt.form;
 
 import static com.oddlabs.tt.gui.Origin.AT_END;
 import static com.oddlabs.tt.gui.Placement.BOTTOM_LEFT;
+import static com.oddlabs.tt.gui.Placement.BOTTOM_RIGHT;
 import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
 
 import java.util.ArrayList;
@@ -49,7 +50,8 @@ import com.oddlabs.tt.guievent.FocusListener;
 import com.oddlabs.tt.guievent.ItemChosenListener;
 import com.oddlabs.tt.guievent.MouseClickListener;
 import com.oddlabs.tt.guievent.RowListener;
-import com.oddlabs.tt.mapeditor.EditorSessionPanel;
+import com.oddlabs.tt.mapeditor.EditorSessionsForm;
+import com.oddlabs.tt.mapeditor.MapEditor;
 import com.oddlabs.tt.mapeditor.MapBrowserPanel;
 import com.oddlabs.tt.mapeditor.MapEditorForm;
 import com.oddlabs.tt.net.ChatCommand;
@@ -72,13 +74,12 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
     private static final int PANEL_INDEX_CHAT = 1;
     private static final int PANEL_INDEX_HIGHSCORE = 2;
     private static final int PANEL_INDEX_MAPS = 3;
-    private static final int PANEL_INDEX_EDIT = 4;
-    // The tab to open on next, as when coming back from a shared map editor session.
-    private static int next_panel_index = PANEL_INDEX_GAME;
+    // Whether to open with the shared map editor sessions showing next time, as when coming back from one.
+    private static boolean open_editor_sessions_next;
 
     private final @NonNull Menu main_menu;
     private final @NonNull ProfilesForm profiles_form;
-    private final Panel[] panels = new Panel[5];
+    private final Panel[] panels = new Panel[4];
 
     // List of games
     private final @NonNull Panel game_list_panel;
@@ -95,7 +96,8 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
     private final @NonNull MultiColumnComboBox<RankingEntry> ranking_list_box;
     private final @NonNull OpenSkillLeaderboard openskill_leaderboard;
     private final @NonNull MapBrowserPanel map_browser;
-    private final @NonNull EditorSessionPanel editor_sessions;
+    // The window of shared map editor sessions, while it is open.
+    private @Nullable EditorSessionsForm editor_sessions;
 
     private final int game_name_size;
     private final int user_name_size;
@@ -115,22 +117,22 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
     private final Panel openskill_list_panel;
 
     public SelectGameMenu(NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull Menu main_menu) {
-        this(network, gui_root, main_menu, takeNextPanelIndex());
+        this(network, gui_root, main_menu, takeOpenEditorSessionsNext());
     }
 
-    private static int takeNextPanelIndex() {
-        int index = next_panel_index;
-        next_panel_index = PANEL_INDEX_GAME;
-        return index;
+    private static boolean takeOpenEditorSessionsNext() {
+        boolean open = open_editor_sessions_next;
+        open_editor_sessions_next = false;
+        return open;
     }
 
-    /** Opens the menu on the map editing tab next time, as after leaving a shared map editor session. */
+    /** Opens the menu with the shared map editor sessions showing next time, as after leaving one. */
     public static void openEditorSessionsNext() {
-        next_panel_index = PANEL_INDEX_EDIT;
+        open_editor_sessions_next = true;
     }
 
-    public SelectGameMenu(NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull Menu main_menu,
-            int panel_index) {
+    private SelectGameMenu(NetworkSelector network, @NonNull GUIRoot gui_root, @NonNull Menu main_menu,
+            boolean open_editor_sessions) {
         this.main_menu = main_menu;
         this.gui_root = gui_root;
         this.network = network;
@@ -168,6 +170,10 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
             joinGame(selected_game);
         });
 
+        HorizButton sessions_button = new HorizButton(MapEditor.i18n("sessions_button"), BUTTON_WIDTH_LONG);
+        game_list_panel.addChild(sessions_button);
+        sessions_button.addMouseClickListener((_, _, _, _) -> openEditorSessions());
+
         // Place game panel objects
         label_headline.place();
         game_list_box.place(label_headline, BOTTOM_LEFT);
@@ -175,6 +181,7 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         update_list_button.place(game_list_box, BOTTOM_LEFT);
         create_button.place(update_list_button, RIGHT_MID);
         join_button.place(create_button, RIGHT_MID);
+        sessions_button.place(game_list_box, BOTTOM_RIGHT);
 
         game_list_panel.compileCanvas();
         panels[PANEL_INDEX_GAME] = game_list_panel;
@@ -273,12 +280,6 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         map_browser = new MapBrowserPanel(gui_root, 350);
         panels[PANEL_INDEX_MAPS] = map_browser;
 
-        // Shared map editor sessions panel
-        editor_sessions = new EditorSessionPanel(gui_root, network, 350, () -> main_menu.setMenuCentered(
-                MapEditorForm.forHosting(network, gui_root, () -> new SelectGameMenu(network, gui_root, main_menu,
-                        PANEL_INDEX_EDIT))));
-        panels[PANEL_INDEX_EDIT] = editor_sessions;
-
         // Common
         ChatRoomInfo info = Network.getMatchmakingClient().getChatRoomInfo();
         if (info != null) {
@@ -287,7 +288,7 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         } else {
             panels[PANEL_INDEX_CHAT] = chat_room_list_panel;
         }
-        panel_group = new PanelGroup(panel_index, panels);
+        panel_group = new PanelGroup(PANEL_INDEX_GAME, panels);
         addChild(panel_group);
 
         HorizButton logout_button = new HorizButton(i18n("logout"), BUTTON_WIDTH);
@@ -304,8 +305,6 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
         updateList(MatchmakingServerInterface.TYPE_RANKING_LIST);
         updateList(MatchmakingServerInterface.TYPE_OPENSKILL_RANKING_LIST);
         updateList(MatchmakingServerInterface.TYPE_OPENSKILL_PERSONAL_RANKING);
-        if (panel_index == PANEL_INDEX_EDIT)
-            updateList(MatchmakingServerInterface.TYPE_EDITOR_SESSION_LIST);
 
         profiles_form = new ProfilesForm(gui_root, main_menu, this);
         if (Network.getMatchmakingClient().getProfile() == null) {
@@ -313,7 +312,21 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
             Network.getMatchmakingClient().requestProfiles();
         } else {
             main_menu.setMenuCentered(this);
+            if (open_editor_sessions)
+                openEditorSessions();
         }
+    }
+
+    private void openEditorSessions() {
+        EditorSessionsForm form = new EditorSessionsForm(gui_root, network, () -> main_menu.setMenuCentered(
+                MapEditorForm.forHosting(network, gui_root, () -> new SelectGameMenu(network, gui_root, main_menu,
+                        true))));
+        form.addCloseListener(() -> {
+            if (editor_sessions == form)
+                editor_sessions = null;
+        });
+        editor_sessions = form;
+        gui_root.addModalForm(form);
     }
 
     private void setPanel(int index, @NonNull Panel panel) {
@@ -459,7 +472,8 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
                 map_browser.add(names);
                 break;
             case MatchmakingServerInterface.TYPE_EDITOR_SESSION_LIST:
-                editor_sessions.add(names);
+                if (editor_sessions != null)
+                    editor_sessions.add(names);
                 break;
             default:
                 throw new IllegalArgumentException("Unexpected list type " + type);
@@ -490,7 +504,8 @@ public final class SelectGameMenu extends Form implements MatchmakingListener, T
                 map_browser.clear();
                 break;
             case MatchmakingServerInterface.TYPE_EDITOR_SESSION_LIST:
-                editor_sessions.clear();
+                if (editor_sessions != null)
+                    editor_sessions.clear();
                 break;
             default:
                 throw new IllegalArgumentException("Unexpected list type " + type);
