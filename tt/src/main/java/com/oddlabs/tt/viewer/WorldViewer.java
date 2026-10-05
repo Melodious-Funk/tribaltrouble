@@ -223,7 +223,9 @@ public final class WorldViewer implements Animated, AutoCloseable, CameraHost {
             }
         };
         PlayerInfo[] player_infos = Arrays.stream(player_slots).map(PlayerSlot::getInfo).toArray(PlayerInfo[]::new);
-        WorldInfo world_info = generator.generate(player_infos.length, world_params.getInitialUnitCount(),
+        // A map may give each lobby slot a starting place of its own.
+        int[] slots = Arrays.stream(player_slots).mapToInt(PlayerSlot::getSlot).toArray();
+        WorldInfo world_info = generator.generate(slots, world_params.getInitialUnitCount(),
                 ingame_info.getRandomStartPosition());
         this.world = World.newWorld(audio_impl, landscape_resources, races_resources, listener, world_params,
                 world_info, generator.getTerrainType(), player_infos, worldFog, colors);
@@ -251,8 +253,8 @@ public final class WorldViewer implements Animated, AutoCloseable, CameraHost {
         if (spectator_view != null)
             animation_manager_local.registerAnimation(new SpectatorMapMode(this, spectator_view));
         camera.reset(getLocalPlayer().getStartX(), getLocalPlayer().getStartY());
-        initPlayers(world_info.starting_locations(), player_slots, world.getPlayers(), unit_infos,
-                world_params.getInitialGameSpeed());
+        initPlayers(world_info.starting_locations(), world_info.ship_starts(), player_slots, world.getPlayers(),
+                unit_infos, world_params.getInitialGameSpeed());
         LocalEventQueue.getQueue().getManager().registerAnimation(this);
     }
 
@@ -310,8 +312,9 @@ public final class WorldViewer implements Animated, AutoCloseable, CameraHost {
         return local_player;
     }
 
-    private void initPlayer(@NonNull ResourceBundle bundle, float[] starting_location, @NonNull PlayerSlot slot,
-            @NonNull Player player, @NonNull UnitInfo unit_info, int initial_gamespeed) {
+    /** @param ship_start where the player's ships start, in meters, as a map's spawn in the sea puts them, or null */
+    private void initPlayer(@NonNull ResourceBundle bundle, float[] starting_location, float @Nullable [] ship_start,
+            @NonNull PlayerSlot slot, @NonNull Player player, @NonNull UnitInfo unit_info, int initial_gamespeed) {
         if (slot.getType() == PlayerSlot.AI) {
             AI ai = null;
             switch (slot.getAIDifficulty()) {
@@ -339,6 +342,10 @@ public final class WorldViewer implements Animated, AutoCloseable, CameraHost {
                 int x = UnitGrid.toGridCoordinate(starting_location[0]);
                 int y = UnitGrid.toGridCoordinate(starting_location[1]);
                 ships = Ship.newStartingShips(player, x, y, unit_info.numPeonsAndWarriors());
+            } else if (ship_start != null && world_params.isShipsEnabled()) {
+                // The units go aboard ships waiting at their spawn; without ships they start on the shore by it.
+                ships = Ship.newStartingShips(player, UnitGrid.toGridCoordinate(ship_start[0]),
+                        UnitGrid.toGridCoordinate(ship_start[1]), unit_info.numPeonsAndWarriors());
             }
             int i = 0;
             for (int j = 0; j < unit_info.numPeons(); j++, i++) {
@@ -389,11 +396,12 @@ public final class WorldViewer implements Animated, AutoCloseable, CameraHost {
         }
     }
 
-    private void initPlayers(float[][] starting_locations, PlayerSlot @NonNull [] slots, Player[] players,
-            UnitInfo[] unit_infos, int initial_gamespeed) {
+    private void initPlayers(float[][] starting_locations, float @Nullable [] @NonNull [] ship_starts,
+            PlayerSlot @NonNull [] slots, Player[] players, UnitInfo[] unit_infos, int initial_gamespeed) {
         ResourceBundle bundle = ResourceBundle.getBundle(Player.class.getName());
         for (int i = 0; i < slots.length; i++) {
-            initPlayer(bundle, starting_locations[i], slots[i], players[i], unit_infos[i], initial_gamespeed);
+            initPlayer(bundle, starting_locations[i], ship_starts[i], slots[i], players[i], unit_infos[i],
+                    initial_gamespeed);
         }
     }
 

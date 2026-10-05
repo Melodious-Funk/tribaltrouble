@@ -6,6 +6,8 @@ import com.oddlabs.tt.form.MessageForm;
 import com.oddlabs.tt.form.TerrainMenu;
 import com.oddlabs.tt.gui.GUIRoot;
 import com.oddlabs.tt.render.Renderer;
+import com.oddlabs.tt.resource.IslandGenerator;
+import com.oddlabs.tt.resource.WorldGenerator;
 import com.oddlabs.tt.util.Utils;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -13,6 +15,8 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.ResourceBundle;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -47,8 +51,8 @@ public final class MapEditor {
      * Opens the map browser to choose a saved map to play, and hands it over once chosen.
      */
     public static void chooseMapToPlay(@NonNull GUIRoot gui_root, @NonNull Consumer<@NonNull CustomMap> play) {
-        chooseMap(gui_root, i18n("play_caption"), i18n("play_button"), (entry, map) -> play.accept(new CustomMap(
-                map.name(), map.settings(), entry.path())));
+        chooseMap(gui_root, i18n("play_caption"), i18n("play_button"), (entry, map) -> chooseSpawns(gui_root, map,
+                choice -> play.accept(new CustomMap(map.name(), map.settings(), entry.path(), choice))));
     }
 
     /**
@@ -56,9 +60,27 @@ public final class MapEditor {
      * first, unless the server has it, so the players joining can download it; it is handed over once it is there.
      */
     public static void chooseMapToHost(@NonNull GUIRoot gui_root, @NonNull Consumer<@NonNull CustomMap> host) {
-        chooseMap(gui_root, i18n("host_caption"), i18n("host_button"), (entry, map) -> UploadMapForm.upload(
-                gui_root, entry.path(), map.name(), shared -> host.accept(new CustomMap(shared.getName(),
-                        map.settings(), entry.path(), shared.getHash()))));
+        chooseMap(gui_root, i18n("host_caption"), i18n("host_button"), (entry, map) -> chooseSpawns(gui_root, map,
+                choice -> UploadMapForm.upload(gui_root, entry.path(), map.name(), shared -> host.accept(
+                        new CustomMap(shared.getName(), map.settings(), entry.path(), shared.getHash(), choice)))));
+    }
+
+    /**
+     * Asks where the players start, when the map has spawns: at them in order, at them shuffled, or anywhere. A map
+     * without spawns goes on at once.
+     */
+    private static void chooseSpawns(@NonNull GUIRoot gui_root, @NonNull MapFile map,
+            @NonNull Consumer<@NonNull SpawnChoice> chosen) {
+        if (map.spawns().isEmpty()) {
+            chosen.accept(SpawnChoice.RANDOM);
+            return;
+        }
+        List<EditorMenu.Entry> entries = new ArrayList<>();
+        for (SpawnChoice choice : SpawnChoice.values())
+            entries.add(new EditorMenu.Entry(choice.getLabel(), () -> chosen.accept(choice)));
+        entries.add(new EditorMenu.Entry(i18n("spawns_cancel"), () -> {
+        }));
+        gui_root.addModalForm(new EditorMenu(i18n("spawns_caption", map.spawns().count()), entries));
     }
 
     /** Opens the map browser to choose a saved map to upload, and hands over the shared map once it is there. */
@@ -89,6 +111,21 @@ public final class MapEditor {
             }
             chosen.accept(entry, map);
         }));
+    }
+
+    /**
+     * Where the players of a game start, as the host chose when picking the custom map the generator builds.
+     *
+     * @return the choice, or null when the game is not on a custom map
+     */
+    public static @Nullable String describeStarts(@Nullable WorldGenerator generator) {
+        if (!(generator instanceof IslandGenerator island))
+            return null;
+        return switch (island.getOverride()) {
+            case SharedMapSource shared -> shared.getSpawnChoice().getLabel();
+            case SavedMapSource saved -> saved.getSpawnChoice().getLabel();
+            case null, default -> null;
+        };
     }
 
     /** Where saved maps live, or null when the game has no writable directory. */

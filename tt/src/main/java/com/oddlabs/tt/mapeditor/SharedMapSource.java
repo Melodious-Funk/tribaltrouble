@@ -13,12 +13,20 @@ import java.nio.file.Path;
  */
 final class SharedMapSource implements LandscapeOverride.Source {
     @Serial
-    private static final long serialVersionUID = 1;
+    private static final long serialVersionUID = 2;
 
     private final @NonNull String hash;
+    private final @NonNull SpawnChoice spawn_choice;
+    private final long spawn_seed;
 
-    SharedMapSource(@NonNull String hash) {
+    /**
+     * @param spawn_choice how the players start at the map's spawns, if it has any
+     * @param spawn_seed   the order of chance of shuffled spawns, the same for everyone as the host picked it
+     */
+    SharedMapSource(@NonNull String hash, @NonNull SpawnChoice spawn_choice, long spawn_seed) {
         this.hash = hash;
+        this.spawn_choice = spawn_choice;
+        this.spawn_seed = spawn_seed;
     }
 
     @NonNull
@@ -26,11 +34,15 @@ final class SharedMapSource implements LandscapeOverride.Source {
         return hash;
     }
 
+    @NonNull SpawnChoice getSpawnChoice() {
+        return spawn_choice;
+    }
+
     @Override
     public @NonNull LandscapeOverride load() throws IOException {
         Path path = SharedMaps.cachePath(hash);
         if (path == null)
             throw new IOException("There is no folder to keep maps in");
-        return SavedMapSource.override(MapFile.load(path));
+        return SavedMapSource.override(MapFile.load(path), spawn_choice, spawn_seed);
     }
 }

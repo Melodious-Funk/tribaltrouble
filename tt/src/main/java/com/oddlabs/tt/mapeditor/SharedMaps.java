@@ -354,7 +354,8 @@ public final class SharedMaps implements MapTransferListener {
     private static byte @NonNull [] fileToShare(@NonNull Path path) throws IOException {
         byte[] raw = Files.readAllBytes(path);
         MapFileHeader header = MapFileHeader.read(raw);
-        if (header.version() == MapFileHeader.VERSION && (header.preview_rgb() != null || !header.edited())) {
+        // This build writes a map without spawns as version 4 and one with them as version 5.
+        if (header.version() >= 4 && (header.preview_rgb() != null || !header.edited())) {
             MapFile.load(path);
             return raw;
         }

@@ -94,6 +94,14 @@ public final class IslandGenerator implements WorldGenerator {
 
     @Override
     public @NonNull WorldInfo generate(int num_players, int initial_unit_count, float random_start_pos) {
+        int[] slots = new int[num_players];
+        for (int i = 0; i < slots.length; i++)
+            slots[i] = i;
+        return generate(slots, initial_unit_count, random_start_pos);
+    }
+
+    @Override
+    public @NonNull WorldInfo generate(int @NonNull [] slots, int initial_unit_count, float random_start_pos) {
         int colormap_size = grid_units * getTexelsPerGridUnit();
         int chunks_per_colormap = colormap_size / TEXELS_PER_CHUNK;
 
@@ -112,8 +120,11 @@ public final class IslandGenerator implements WorldGenerator {
         } catch (IOException e) {
             throw new UncheckedIOException("Could not read the map to play", e);
         }
-        Landscape landscape = new Landscape(num_players, meters_per_world, terrain, detail_prefade, hills,
-                vegetation_amount, supplies_amount, seed, initial_unit_count, random_start_pos, archipelago, fixed);
+        // The players start where the map's maker put them, as far as the map says.
+        LandscapeOverride.Spawns spawns = fixed != null ? fixed.spawns() : null;
+        Landscape landscape = new Landscape(slots.length, meters_per_world, terrain, detail_prefade, hills,
+                vegetation_amount, supplies_amount, seed, initial_unit_count, random_start_pos, archipelago, fixed,
+                spawns != null ? spawns.arrange(slots) : null);
         Instant time_after = Instant.now();
         IO.println("Landscape created in " + Duration.between(time_before, time_after));
         BlendInfo[] blend_infos = landscape.getBlendInfos();
@@ -134,7 +145,7 @@ public final class IslandGenerator implements WorldGenerator {
                 landscape.getPlants(),
                 landscape.getAccessGrid(), landscape.getDockGrid(), landscape.getWaterGrid(),
                 landscape.getBuildGrid(), landscape.getIslandIds(), landscape.getIslandInfos(),
-                landscape.getStartingLocations(),
+                landscape.getStartingLocations(), landscape.getShipLocations(),
                 blend_infos);
     }
 }

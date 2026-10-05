@@ -44,6 +44,7 @@ import com.oddlabs.tt.net.PlayerSlot;
 import com.oddlabs.tt.player.PlayerInfo;
 import com.oddlabs.tt.resource.WorldGenerator;
 import com.oddlabs.tt.util.Utils;
+import com.oddlabs.util.Compatibility;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -102,6 +103,8 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
     private boolean ready;
     // Whether the game's map is here to play; a shared map the player lacks is downloaded first.
     private boolean map_ready = true;
+    // Where the players start on a custom map, as the host chose, or null.
+    private final @Nullable String starts;
 
     @SuppressWarnings("unchecked")
     public GameMenu(@NonNull GameNetwork game_network, GUIRoot gui_root, SelectGameMenu owner, @NonNull Game game,
@@ -114,6 +117,7 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
         this.local_player_slot = player_slot;
         this.rated = game.isRated();
         this.game = game;
+        this.starts = MapEditor.describeStarts(generator);
 
         String tag = rated ? i18n("rated") + " " : "";
         Label game_name_label = new Label(i18n("game") + " " + tag + game.getName(), Skin.getSkin().getHeadlineFont());
@@ -581,7 +585,7 @@ public final class GameMenu extends Panel implements ConfigurationListener, Chat
     private final class InfoButtonListener implements MouseClickListener {
         @Override
         public void mouseClicked(@NonNull MouseButton button, int x, int y, int clicks) {
-            gui_root.addModalForm(new GameInfoForm(game));
+            gui_root.addModalForm(new GameInfoForm(game, Compatibility.SIM_VERSION, starts));
         }
     }
 

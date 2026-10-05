@@ -64,11 +64,12 @@ public final class MapEditorForm extends Form {
     private final @Nullable Runnable back;
 
     private @NonNull MapSettings settings;
-    // The saved map the settings came from, and its edited heights and resources if it has them.
+    // The saved map the settings came from, and its edited heights, resources and spawns if it has them.
     private @Nullable String map_name;
     private @NonNull String description = "";
     private float @Nullable [] @Nullable [] heights;
     private MapFile.@Nullable Resources resources;
+    private @NonNull Spawns spawns = Spawns.NONE;
     private boolean applying;
     // Takes the island chosen, when the window picks one for a campaign level instead of starting the editor.
     private final @Nullable Consumer<@NonNull MapFile> chosen;
@@ -276,10 +277,11 @@ public final class MapEditorForm extends Form {
         if (applying || new_settings.equals(settings))
             return;
         settings = new_settings;
-        if (heights != null || resources != null) {
+        if (heights != null || resources != null || !spawns.isEmpty()) {
             // Edits only fit the island they were made on, so this is a new map now.
             heights = null;
             resources = null;
+            spawns = Spawns.NONE;
             map_name = null;
             description = "";
         }
@@ -292,6 +294,7 @@ public final class MapEditorForm extends Form {
             return false;
         heights = null;
         resources = null;
+        spawns = Spawns.NONE;
         map_name = null;
         description = "";
         showSettings(parsed);
@@ -335,8 +338,9 @@ public final class MapEditorForm extends Form {
         gui_root.addModalForm(new SaveMapDialog(gui_root, dir, map_name != null ? map_name : "", description,
                 (name, new_description) -> {
             try {
-                MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources) : null;
-                new MapFile(name, settings, heights, resources, preview, new_description).save(dir);
+                MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources, spawns)
+                        : null;
+                new MapFile(name, settings, heights, resources, preview, new_description, spawns).save(dir);
                 map_name = name;
                 description = new_description;
                 refresh();
@@ -362,6 +366,7 @@ public final class MapEditorForm extends Form {
             }
             heights = map.heights();
             resources = map.resources();
+            spawns = map.spawns();
             map_name = map.name();
             description = map.description();
             showSettings(map.settings());
@@ -401,16 +406,16 @@ public final class MapEditorForm extends Form {
     private void start() {
         if (chosen != null) {
             remove();
-            MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources) : null;
+            MapPreview preview = heights != null ? MapPreview.render(heights, settings, resources, spawns) : null;
             chosen.accept(new MapFile(map_name != null ? map_name : "", settings, heights, resources, preview,
-                    description));
+                    description, spawns));
             return;
         }
         button_start.setDisabled(true);
         if (check_campaign != null && check_campaign.isMarked()) {
             // A new campaign, with the island as its first level.
             CampaignSession campaign = CampaignSession.startingWith(new MapFile(map_name != null ? map_name : "",
-                    settings, heights, resources, null, description));
+                    settings, heights, resources, null, description, spawns));
             ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, campaign,
                     new MapEditorLoader.SessionStart.Host(CampaignEditor.i18n("session_default_name",
                             EditorSession.localNick()))));
@@ -420,6 +425,6 @@ public final class MapEditorForm extends Form {
                 : new MapEditorLoader.SessionStart.Host(map_name != null ? map_name : MapEditor.i18n(
                         "session_default_name", EditorSession.localNick()));
         ProgressForm.setProgressForm(network, gui_root.getGUI(), new MapEditorLoader(network, settings, map_name,
-                description, heights, resources, session));
+                description, heights, resources, spawns, session));
     }
 }

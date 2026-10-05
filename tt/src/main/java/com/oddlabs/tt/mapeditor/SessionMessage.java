@@ -17,6 +17,7 @@ import java.util.Arrays;
  * it, as {@link CampaignFile#levelToBytes} writes it.</li>
  * <li>{@link #ADD_LEVEL}: a new level for everyone, at the end of the campaign or in place of the level of that number
  * if another player's new level got there first; everyone goes on to it.</li>
+ * <li>{@link #SPAWNS}: players' spawns moved or taken away, as {@link SpawnSync} writes them.</li>
  * </ul>
  *
  * <p>Edits of a level other than the one shown are left out: they were made before their player heard everyone had
@@ -27,6 +28,7 @@ final class SessionMessage {
     static final byte SCENARIO = 2;
     static final byte SWITCH_LEVEL = 3;
     static final byte ADD_LEVEL = 4;
+    static final byte SPAWNS = 5;
 
     private static final int HEADER_SIZE = 5;
 

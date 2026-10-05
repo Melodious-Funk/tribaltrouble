@@ -1,8 +1,12 @@
 package com.oddlabs.tt.mapeditor;
 
+import com.oddlabs.tt.gui.Box;
 import com.oddlabs.tt.gui.FocusDirection;
 import com.oddlabs.tt.gui.Form;
+import com.oddlabs.tt.gui.FormData;
 import com.oddlabs.tt.gui.HorizButton;
+import com.oddlabs.tt.gui.IconButton;
+import com.oddlabs.tt.gui.Skin;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -44,10 +48,11 @@ final class EditorMenu extends Form {
 
     EditorMenu(@NonNull String caption, @NonNull List<@NonNull Entry> entries) {
         super(caption);
+        int button_width = Math.max(BUTTON_WIDTH, widthForCaption(caption));
         HorizButton first = null;
         HorizButton previous = null;
         for (Entry entry : entries) {
-            HorizButton button = new HorizButton(entry.label(), BUTTON_WIDTH);
+            HorizButton button = new HorizButton(entry.label(), button_width);
             button.addMouseClickListener((_, _, _, _) -> {
                 remove();
                 entry.action().run();
@@ -63,6 +68,16 @@ final class EditorMenu extends Form {
         button_first = first;
         compileCanvas();
         centerPos();
+    }
+
+    /** How wide the buttons must be for the window to fit its caption and, past it, the close button. */
+    private static int widthForCaption(@NonNull String caption) {
+        FormData data = Skin.getSkin().getFormData();
+        Box form = data.form();
+        int spacing = data.objectSpacing();
+        int close = new IconButton(data.formClose(), null).getWidth();
+        int needed = data.captionLeft() + data.captionFont().getWidth(caption) + spacing + close + data.closeRight();
+        return needed - form.getLeftOffset() - form.getRightOffset() - 2 * spacing;
     }
 
     @Override

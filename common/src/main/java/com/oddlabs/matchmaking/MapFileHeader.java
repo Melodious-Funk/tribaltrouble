@@ -15,20 +15,25 @@ import java.util.zip.GZIPInputStream;
  *
  * <p>A map file is a gzipped stream of the magic, a version, six settings, whether heights, resources (version 2
  * on) and a preview (version 3 on) follow, the description (version 4 on, in modified UTF-8 as
- * {@link java.io.DataOutput#writeUTF} writes it), then the preview as a side length and three bytes per pixel.
+ * {@link java.io.DataOutput#writeUTF} writes it), the players' spawns (version 5 on: a count, then a player slot
+ * byte and two shorts of grid position each), then the preview as a side length and three bytes per pixel.
  *
  * @param size         the island size, as in {@link Game#getSize()}
  * @param terrain      the terrain type, as in {@link Game#getTerrainType()}
+ * @param edited       whether the map keeps heights, resources or spawns of its own, beyond its settings
+ * @param spawns       how many players' spawns the map's maker picked
  * @param preview_size pixels along each side of the preview, or 0 when the file has none
  * @param description  what the map's maker wrote about it; empty when the file has none
  * @param preview_rgb  three bytes per pixel, rows from south to north, or null when the file has no preview
  */
 public record MapFileHeader(int version, int size, int terrain, int hills, int trees, int supplies, int seed,
-                            boolean edited, @NonNull String description, int preview_size,
+                            boolean edited, @NonNull String description, int spawns, int preview_size,
                             byte @Nullable [] preview_rgb) {
 
     public static final int MAGIC = 0x54_54_4D_50; // "TTMP"
-    public static final int VERSION = 4;
+    public static final int VERSION = 5;
+    /** Bytes each spawn takes: the player slot, then x and y as shorts. */
+    public static final int SPAWN_SIZE = 5;
     public static final int MAX_PREVIEW_SIZE = 256;
     /** The longest description a map may have, in characters. */
     public static final int MAX_DESCRIPTION_LENGTH = 500;
@@ -57,6 +62,12 @@ public record MapFileHeader(int version, int size, int terrain, int hills, int t
             String description = version >= 4 ? in.readUTF() : "";
             if (description.length() > MAX_DESCRIPTION_LENGTH)
                 throw new IOException("Description too long");
+            int spawns = version >= 5 ? in.readUnsignedByte() : 0;
+            if (spawns > MatchmakingServerInterface.MAX_PLAYERS)
+                throw new IOException("Bad spawn count " + spawns);
+            in.skipNBytes((long) spawns * SPAWN_SIZE);
+            if (spawns > 0)
+                edited = true;
             int preview_size = 0;
             byte[] rgb = null;
             if (has_preview) {
@@ -67,7 +78,7 @@ public record MapFileHeader(int version, int size, int terrain, int hills, int t
                 in.readFully(rgb);
             }
             return new MapFileHeader(version, size, terrain, hills, trees, supplies, seed, edited, description,
-                    preview_size, rgb);
+                    spawns, preview_size, rgb);
         }
     }
 

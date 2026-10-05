@@ -79,7 +79,8 @@ final class LoadCampaignDialog implements FileBrowserDialog.FileType<CampaignFil
         CampaignFile.Level first = CampaignFile.loadLevel(entry.path(), 0);
         if (first.preview != null)
             return first.preview;
-        return first.heights != null ? MapPreview.render(first.heights, first.settings, first.resources) : null;
+        return first.heights != null ? MapPreview.render(first.heights, first.settings, first.resources,
+                first.spawns) : null;
     }
 
     @Override

@@ -37,6 +37,9 @@ The map editor's toolbar is at the top. The campaign bar is at the bottom:
 - **Triggers...**: the level's story and rules (see below).
 - **Level...**: the title, the briefing shown before the level, and the starting objective.
 
+The map editor's **Spawns** tool (see [Spawns](#spawns)) works on a level too: a tribe's spawn is where its camera
+starts and where its AI calls home, in place of its quarters or chieftain.
+
 Units, buildings and statues only go on playable ground (see **Playable area** in the toolbar) that is clear of
 resources and other objects. Terrain edits that cut ground off the playable area take the objects there away
 too; Ctrl+Z brings them back with the terrain.
@@ -76,6 +79,36 @@ time. **Test this level** takes you out of the session.
 
 Press **Enter** to chat with everyone in the session. Messages also show on the info lines, and chat commands such
 as `/ignore` work as in a game. Map editing sessions have the same chat.
+
+## Spawns
+
+In the map editor and the campaign editor, the **Spawns** tool (on the toolbar's third row, with a dropdown of
+players) picks where each player starts:
+
+- Left-click puts the chosen player's spawn there, on playable ground or the sea; a player has one spawn, so
+  clicking again moves it. Right-click takes away the spawn under the cursor.
+- Each spawn shows on the island as a double ring in the player's colour with the player's number, floating on the
+  sea where it lies in it, and crossed out in red if a terrain edit leaves it on neither. Undo and redo take spawns back and put them back, and in a
+  shared session everyone sees them move.
+- Map previews (the map browser, the multiplayer menu's shared maps and lobby, campaign levels) show each spawn as a
+  numbered disc in the player's default colour.
+
+Playing a map with spawns from **Custom map...** (skirmish or hosting a multiplayer game) first asks where players
+start:
+
+- **Spawns, in order**: the player in lobby slot 1 starts at spawn 1, and so on. Players whose slot has no spawn
+  take the spawns no one has, in order.
+- **Spawns, shuffled**: the players take the spawns in an order of chance, the same for everyone in the game.
+- **Random places**: the spawns are ignored and the game picks places as on any island.
+
+Players left over when the spawns run out start at the game's own places, as far from the spawns as it finds. In a
+multiplayer lobby, **Info** shows the choice under **Players start**. Each player's units start by their spawn with
+room for quarters and an armory, or at the nearest such room; on an archipelago, their ships wait in the nearest deep
+water.
+
+A spawn in the sea starts its player's units aboard ships at the nearest deep water to it when the game has ships
+(the **Ships** advanced setting, or an archipelago), and on the nearest walkable shore when it does not. A spawn in an
+inland lake always starts them on its shore.
 
 ## Difficulty and the AI
 
@@ -130,7 +163,12 @@ player's starting chieftain dies or the player has no units left.
 ## File format
 
 `CampaignFile` writes a gzipped stream: magic `TTCP`, version, description, level titles, then for each level
-the map exactly as a version 3 `.ttmap` body (`MapFile.writeBody`) followed by the `Scenario`. Scenario version 2
+the map exactly as a `.ttmap` body (`MapFile.writeBody`) followed by the `Scenario`. Campaign version 1 keeps the
+maps as version 3 bodies; version 2 keeps them as version 5 bodies, which hold the level's spawns.
+
+`.ttmap` version 5 adds the spawns after the description: a count, then a player slot byte and the grid cell as two
+shorts per spawn. A map without spawns is still written as version 4, so older builds and servers read it; the
+matchmaking server reads version 5 headers (`MapFileHeader`) from this change on. Scenario version 2
 gave trigger steps a building beside their unit; version 1 levels still load. Saved campaign progress
 keeps the campaign's name in `CampaignState`, so a campaign can be edited between plays; new levels open as the
 ones before them are won.

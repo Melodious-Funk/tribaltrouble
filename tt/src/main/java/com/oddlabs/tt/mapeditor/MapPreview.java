@@ -1,8 +1,10 @@
 package com.oddlabs.tt.mapeditor;
 
 import com.oddlabs.tt.global.Globals;
+import com.oddlabs.tt.global.Settings;
 import com.oddlabs.tt.landscape.HeightMap;
 import com.oddlabs.tt.procedural.Landscape;
+import org.joml.Vector4fc;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -10,7 +12,7 @@ import java.util.List;
 
 /**
  * A small top-down picture of a map, north up: sea shaded by depth, land by height and slope with light from the
- * north-west, and every resource as a dot.
+ * north-west, every resource as a dot, and each player's spawn as a numbered disc in the player's colour.
  *
  * @param size pixels along each side
  * @param rgb three bytes per pixel, rows from south to north
@@ -37,6 +39,12 @@ record MapPreview(int size, byte @NonNull [] rgb) {
     private static final float[] PINE = {.06f, .22f, .12f};
     private static final float[] ROCK = {.82f, .82f, .80f};
     private static final float[] IRON = {.75f, .38f, .22f};
+    private static final float[] OUTLINE = {.08f, .08f, .08f};
+    private static final float[] LIGHT_DIGIT = {1f, 1f, 1f};
+    // The digits 0 to 9, three pixels wide and five high, a row of bits from left to right per line, top line first.
+    private static final int[][] DIGITS = {
+            {7, 5, 5, 5, 7}, {2, 6, 2, 2, 7}, {7, 1, 7, 4, 7}, {7, 1, 7, 1, 7}, {5, 5, 7, 1, 1},
+            {7, 4, 7, 1, 7}, {7, 4, 7, 5, 7}, {7, 1, 1, 1, 1}, {7, 5, 7, 5, 7}, {7, 5, 7, 1, 7}};
 
     MapPreview {
         if (size <= 0 || rgb.length != size * size * 3)
@@ -48,9 +56,10 @@ record MapPreview(int size, byte @NonNull [] rgb) {
      *
      * @param heights height map cells in meters, indexed [y][x]
      * @param resources the resources to mark, or null for none
+     * @param spawns the players' spawns to mark
      */
     static @NonNull MapPreview render(float @NonNull [] @NonNull [] heights, @NonNull MapSettings settings,
-            MapFile.@Nullable Resources resources) {
+            MapFile.@Nullable Resources resources, @NonNull Spawns spawns) {
         int grid = heights.length;
         int size = Math.min(grid, MAX_SIZE);
         boolean viking = Landscape.TerrainType.values()[settings.terrain()] == Landscape.TerrainType.VIKING;
@@ -80,7 +89,55 @@ record MapPreview(int size, byte @NonNull [] rgb) {
             mark(rgb, size, grid, resources.of(Resource.ROCK), ROCK, 2);
             mark(rgb, size, grid, resources.of(Resource.IRON), IRON, 2);
         }
+        // Spawns on top of everything, as they matter most when choosing a map to play.
+        for (int player = 0; player < Spawns.COUNT; player++) {
+            int[] cell = spawns.get(player);
+            if (cell != null)
+                markSpawn(rgb, size, cell[0] * size / grid, cell[1] * size / grid, player);
+        }
         return new MapPreview(size, rgb);
+    }
+
+    /**
+     * A disc in the player's colour with a dark rim and the player's number in it, centred on a pixel. The colours
+     * are the game's default team colours, so a map looks the same to everyone it is shared with.
+     */
+    private static void markSpawn(byte @NonNull [] rgb, int size, int cx, int cy, int player) {
+        Vector4fc team = Settings.DEFAULT_TEAM_COLOURS[player % Settings.DEFAULT_TEAM_COLOURS.length];
+        float[] fill = {team.x(), team.y(), team.z()};
+        String number = Integer.toString(player + 1);
+        // Wide enough for two digits from a radius of 5 on.
+        int radius = Math.clamp(size / 24, number.length() > 1 ? 5 : 4, 8);
+        for (int dy = -radius - 1; dy <= radius + 1; dy++) {
+            for (int dx = -radius - 1; dx <= radius + 1; dx++) {
+                int px = cx + dx;
+                int py = cy + dy;
+                if (px < 0 || py < 0 || px >= size || py >= size)
+                    continue;
+                float distance = (float) Math.sqrt(dx * dx + dy * dy);
+                if (distance <= radius - .5f)
+                    put(rgb, size, px, py, fill);
+                else if (distance <= radius + .7f)
+                    put(rgb, size, px, py, OUTLINE);
+            }
+        }
+        // Dark digits on a light colour, light ones on a dark colour.
+        float luma = .3f * fill[0] + .59f * fill[1] + .11f * fill[2];
+        float[] ink = luma > .55f ? OUTLINE : LIGHT_DIGIT;
+        int width = number.length() * 4 - 1;
+        int left = cx - width / 2;
+        for (int d = 0; d < number.length(); d++) {
+            int[] glyph = DIGITS[number.charAt(d) - '0'];
+            for (int line = 0; line < glyph.length; line++) {
+                // Rows run from south to north, so the top line is the highest row.
+                int py = cy + 2 - line;
+                for (int bit = 0; bit < 3; bit++) {
+                    int px = left + d * 4 + bit;
+                    if ((glyph[line] & (4 >> bit)) != 0 && px >= 0 && py >= 0 && px < size && py < size)
+                        put(rgb, size, px, py, ink);
+                }
+            }
+        }
     }
 
     private static void landColor(float @NonNull [] @NonNull [] heights, int x, int y, float h, float sea,

@@ -17,6 +17,7 @@ import com.oddlabs.tt.form.MessageForm;
 import com.oddlabs.tt.form.ProgressForm;
 import com.oddlabs.tt.form.QuestionForm;
 import com.oddlabs.tt.form.SelectGameMenu;
+import com.oddlabs.tt.global.Settings;
 import com.oddlabs.tt.gui.CheckBox;
 import com.oddlabs.tt.gui.CursorType;
 import com.oddlabs.tt.gui.Form;
@@ -38,6 +39,7 @@ import com.oddlabs.tt.input.InputPhase;
 import com.oddlabs.tt.input.Key;
 import com.oddlabs.tt.landscape.HeightMap;
 import com.oddlabs.tt.landscape.World;
+import com.oddlabs.tt.pathfinder.UnitGrid;
 import com.oddlabs.tt.player.campaign.CampaignState;
 import com.oddlabs.tt.procedural.Landscape;
 import com.oddlabs.tt.render.LandscapeLocation;
@@ -48,6 +50,8 @@ import com.oddlabs.tt.render.RenderQueues;
 import com.oddlabs.tt.render.Renderer;
 import com.oddlabs.tt.scenery.Water;
 import com.oddlabs.tt.viewer.Cheat;
+import org.joml.Vector4f;
+import org.joml.Vector4fc;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -55,6 +59,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
@@ -75,6 +80,10 @@ import static com.oddlabs.tt.gui.Placement.RIGHT_MID;
  * the course, Backspace takes back its last point and Escape drops it. A path's legs too steep to walk show red. The
  * copy brush copies the area dragged over, then pastes it at each left click; R turns the copy and M mirrors it, and
  * a right click or Escape drops it.
+ *
+ * <p>The spawn tool puts the chosen player's spawn where the left button clicks, on playable ground or the sea, and the
+ * right button takes away the spawn under the cursor. Every spawn shows as a ring in its player's colour with the
+ * player's number, floating on the sea where it lies in it, and crossed out in red while it is on neither.
  *
  * <p>The map mode key (Space by default) flies up to the game's island overview. Another press of it flies back, and
  * a left click flies down to the clicked spot. Nothing else works while there.
@@ -99,6 +108,18 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private static final int LABEL_WIDTH = 150;
     private static final int PULLDOWN_WIDTH = 150;
     private static final int OVERLAY_PULLDOWN_WIDTH = 190;
+    private static final int SPAWN_PULLDOWN_WIDTH = 110;
+    /** The radius of a spawn's ring, in meters, and how far from one a right click takes it away, in cells. */
+    private static final float SPAWN_RADIUS = 9f;
+    private static final float SPAWN_PICK_CELLS = 6f;
+    // The seven segments of each digit drawn on a spawn: top, top right, bottom right, bottom, bottom left, top left,
+    // middle, from the lowest bit. The digits' size and the gap between them, and the dots' spacing along a segment,
+    // close enough for the dots to run together, in meters.
+    private static final int[] SEGMENTS = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
+    private static final float DIGIT_WIDTH = 4f;
+    private static final float DIGIT_HEIGHT = 7f;
+    private static final float DIGIT_GAP = 2f;
+    private static final float DIGIT_DOT_SPACING = .6f;
     private static final int HINT_WIDTH = 760;
     /** Seconds between edits sent to a shared session, at least, and the bytes a second they may take at most. */
     private static final float SEND_INTERVAL = .1f;
@@ -152,6 +173,12 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     // Whether the resources differ from the generated ones, and whether they changed since the last save.
     private boolean resources_edited;
     private boolean resources_modified;
+    // Where each player starts, the player the spawn tool puts down, and whether the spawns changed since the last
+    // save.
+    private @NonNull Spawns spawns;
+    private int spawn_player;
+    private boolean spawns_modified;
+    private final @NonNull PulldownButton<Integer> pulldown_spawn;
     private final @NonNull BrushRenderer brush_renderer = new BrushRenderer();
     private final @NonNull Animated ticker = this::tick;
     private final @NonNull LandscapeLocation location = new LandscapeLocation();
@@ -217,6 +244,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     private @Nullable SessionSync sync;
     // What keeps a campaign level's units, areas and triggers in step, in a campaign session.
     private @Nullable ScenarioSync scenario_sync;
+    // What keeps the spawns in step.
+    private @Nullable SpawnSync spawn_sync;
     private @Nullable RemoteEditors remotes;
     private float send_timer;
     private float send_interval = SEND_INTERVAL;
@@ -241,7 +270,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             @NonNull AccessMap access_map, @NonNull TintOverlay tint, @NonNull ResourceLayer layer,
             @NonNull PlantLayer plants, @NonNull Water water, @NonNull MapSettings settings,
             @Nullable String map_name, @NonNull String description, boolean edited, boolean resources_edited,
-            SessionSync.@NonNull Link link,
+            @NonNull Spawns spawns, SessionSync.@NonNull Link link,
             @Nullable CampaignTools campaign) {
         super(gui_root, null);
         this.link = link;
@@ -261,6 +290,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         this.edited = edited;
         this.layer = layer;
         this.resources_edited = resources_edited;
+        this.spawns = spawns;
         this.campaign = campaign;
 
         game_camera = new EditorCamera(this, camera_state);
@@ -275,8 +305,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         Landscape.TerrainType terrain = Landscape.TerrainType.values()[settings.terrain()];
         PulldownMenu<Brush> menu_terrain = new PulldownMenu<>();
         PulldownMenu<Brush> menu_resource = new PulldownMenu<>();
-        for (Brush b : Brush.values())
-            (b.isResourceBrush() ? menu_resource : menu_terrain).addItem(new PulldownItem<>(b.getName(terrain), b));
+        for (Brush b : Brush.values()) {
+            if (b != Brush.SPAWN)
+                (b.isResourceBrush() ? menu_resource : menu_terrain).addItem(new PulldownItem<>(b.getName(terrain),
+                        b));
+        }
         RadioButtonGroup tools = new RadioButtonGroup();
         RadioButton radio_terrain = new RadioButton(true, tools, MapEditor.i18n("tool_terrain"));
         RadioButton radio_resource = new RadioButton(false, tools, MapEditor.i18n("tool_resources"));
@@ -307,6 +340,27 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         });
         Group group_terrain = tool(radio_terrain, pulldown_terrain);
         Group group_resource = tool(radio_resource, pulldown_resource);
+        // The spawn tool, with a dropdown of the players whose spawn a click puts down.
+        RadioButton radio_spawns = new RadioButton(false, tools, MapEditor.i18n("tool_spawns"));
+        PulldownMenu<Integer> menu_spawn = new PulldownMenu<>();
+        for (int i = 0; i < Spawns.COUNT; i++)
+            menu_spawn.addItem(new PulldownItem<>(MapEditor.i18n("spawn_player", i + 1), i));
+        pulldown_spawn = new PulldownButton<>(gui_root, menu_spawn, 0, SPAWN_PULLDOWN_WIDTH);
+        colourSpawnPlayer();
+        radio_spawns.addMouseClickListener((_, _, _, _) -> {
+            campaign_active = false;
+            selectBrush(Brush.SPAWN);
+            setFocus();
+        });
+        menu_spawn.addItemChosenListener((menu, _) -> {
+            tools.mark(radio_spawns);
+            campaign_active = false;
+            spawn_player = chosen(menu);
+            colourSpawnPlayer();
+            selectBrush(Brush.SPAWN);
+            setFocus();
+        });
+        Group group_spawns = tool(radio_spawns, pulldown_spawn);
         toolbar.addChild(group_terrain);
         toolbar.addChild(group_resource);
         group_terrain.place();
@@ -378,6 +432,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         toolbar.addChild(button_menu);
         toolbar.addChild(label_hint);
         toolbar.addChild(label_controls);
+        toolbar.addChild(group_spawns);
         // The brushes and their settings along the top, what to show beside the hint below.
         check_natural.place(group_resource, RIGHT_MID);
         label_radius.place(check_natural, RIGHT_MID, 20);
@@ -387,6 +442,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         button_menu.place(button_redo, RIGHT_MID);
         label_hint.place(group_terrain, BOTTOM_LEFT);
         label_controls.place(label_hint, BOTTOM_LEFT);
+        group_spawns.place(label_controls, RIGHT_MID);
         check_trees.place(label_hint, RIGHT_MID);
         check_wireframe.place(check_trees, RIGHT_MID);
         group_overlay.place(check_wireframe, RIGHT_MID, 20);
@@ -400,6 +456,11 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         }
 
         refreshLabels();
+    }
+
+    private void colourSpawnPlayer() {
+        Vector4f[] colours = Settings.getSettings().team_colours;
+        pulldown_spawn.setLabelColor(colours[spawn_player % colours.length]);
     }
 
     /** A tool's button with its dropdown beside it, kept together so the row stays as tall as the dropdown. */
@@ -446,6 +507,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
      * any, as a terrain step.
      */
     private record PasteStep(@Nullable TerrainStep terrain, ResourceLayer.@NonNull Stroke resources) {
+    }
+
+    /** A spawn moved, in the undo history: where the player's spawn was before, which undo puts it back to. */
+    private record SpawnStep(int player, int @Nullable [] cell) {
     }
 
     /** The toolbar looks like a window but Escape on it opens the editor menu instead of closing it. */
@@ -659,6 +724,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 return;
             stroke_sign = sign;
             campaign.begin(sign, cursor_x, cursor_y);
+            return;
+        }
+        if (brush == Brush.SPAWN) {
+            clickSpawn(sign);
             return;
         }
         if (brush.isCourse()) {
@@ -1042,6 +1111,9 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             undone = campaign.getLayer().undo(objects);
         } else if (step instanceof TerrainStep terrain) {
             undone = takeBackTerrain(terrain, redo);
+        } else if (step instanceof SpawnStep spawn) {
+            undone = new SpawnStep(spawn.player(), spawns.get(spawn.player()));
+            setSpawn(spawn.player(), spawn.cell());
         } else if (step instanceof PasteStep paste) {
             // Undone, what it placed goes first, so what it cleared comes back on the ground it stood on; redone,
             // the heights come first, for the resources to stand on.
@@ -1073,6 +1145,111 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (objects != null && !objects.isEmpty() && campaign != null)
             objects = campaign.getLayer().undo(objects);
         return new TerrainStep(resources, objects);
+    }
+
+    // ---- Spawns ----
+
+    /**
+     * A click of the spawn tool: the left button puts the chosen player's spawn under the cursor, moving it if the
+     * player has one, and the right button takes away the spawn nearest the cursor.
+     */
+    private void clickSpawn(int sign) {
+        if (!has_cursor)
+            return;
+        int last = editor.getSize() - 1;
+        int x = Math.clamp(UnitGrid.toGridCoordinate(cursor_x), 0, last);
+        int y = Math.clamp(UnitGrid.toGridCoordinate(cursor_y), 0, last);
+        if (sign < 0) {
+            int player = spawns.nearest(x, y, Math.max(SPAWN_PICK_CELLS, toGrid(SPAWN_RADIUS)));
+            if (player < 0)
+                getGUIRoot().getInfoPrinter().print(MapEditor.i18n("no_spawn_here"));
+            else
+                moveSpawn(player, null);
+            return;
+        }
+        if (!isSpawnGround(x, y)) {
+            getGUIRoot().getInfoPrinter().print(MapEditor.i18n("spawn_not_playable"));
+            return;
+        }
+        moveSpawn(spawn_player, new int[]{x, y});
+    }
+
+    /**
+     * Whether a spawn may lie on a cell: playable ground, or the sea, where the player starts on ships when the game
+     * has them and on the nearest shore when it does not.
+     */
+    private boolean isSpawnGround(int x, int y) {
+        return access_map.get(x, y) == AccessMap.Kind.REGION || access_map.isSea(x, y);
+    }
+
+    /** Moves a player's spawn, or takes it away when the cell is null, as a step to undo. */
+    private void moveSpawn(int player, int @Nullable [] cell) {
+        int[] before = spawns.get(player);
+        if (Arrays.equals(before, cell))
+            return;
+        remember(new SpawnStep(player, before));
+        setSpawn(player, cell);
+    }
+
+    private void setSpawn(int player, int @Nullable [] cell) {
+        spawns = spawns.with(player, cell);
+        spawns_modified = true;
+        if (spawn_sync != null)
+            spawn_sync.changed(player);
+    }
+
+    /** Every player's spawn, each crossed out while it is on neither playable ground nor the sea. */
+    private void drawSpawns(BrushRenderer.@NonNull Batch batch) {
+        for (int player = 0; player < Spawns.COUNT; player++) {
+            int[] cell = spawns.get(player);
+            if (cell != null)
+                drawSpawn(batch, UnitGrid.coordinateFromGrid(cell[0]), UnitGrid.coordinateFromGrid(cell[1]), player,
+                        .95f, isSpawnGround(cell[0], cell[1]));
+        }
+    }
+
+    /** A double ring in the player's colour with the player's number in it, centred on a point in meters. */
+    private static void drawSpawn(BrushRenderer.@NonNull Batch batch, float x, float y, int player, float a,
+            boolean playable) {
+        Vector4f[] colours = Settings.getSettings().team_colours;
+        Vector4fc c = colours[player % colours.length];
+        batch.circle(x, y, SPAWN_RADIUS, c.x(), c.y(), c.z(), a);
+        batch.circle(x, y, SPAWN_RADIUS - .5f, c.x(), c.y(), c.z(), a);
+        // North up, as the editor's camera starts.
+        String number = Integer.toString(player + 1);
+        float left = x - (number.length() * (DIGIT_WIDTH + DIGIT_GAP) - DIGIT_GAP) / 2f;
+        for (int i = 0; i < number.length(); i++)
+            drawDigit(batch, left + i * (DIGIT_WIDTH + DIGIT_GAP), y - DIGIT_HEIGHT / 2f, number.charAt(i) - '0', c,
+                    a);
+        if (!playable) {
+            float d = SPAWN_RADIUS * .7f;
+            batch.line(x - d, y - d, x + d, y + d, 1f, .2f, .2f, a);
+            batch.line(x - d, y + d, x + d, y - d, 1f, .2f, .2f, a);
+        }
+    }
+
+    private static void drawDigit(BrushRenderer.@NonNull Batch batch, float left, float bottom, int digit,
+            @NonNull Vector4fc c, float a) {
+        // A one is only the right hand stroke, which goes in the middle instead.
+        if (digit == 1)
+            left -= DIGIT_WIDTH / 2f;
+        float right = left + DIGIT_WIDTH;
+        float top = bottom + DIGIT_HEIGHT;
+        float middle = bottom + DIGIT_HEIGHT / 2f;
+        float[][] segments = {{left, top, right, top}, {right, top, right, middle}, {right, middle, right, bottom},
+                {left, bottom, right, bottom}, {left, middle, left, bottom}, {left, top, left, middle},
+                {left, middle, right, middle}};
+        for (int i = 0; i < segments.length; i++) {
+            if ((SEGMENTS[digit] & 1 << i) == 0)
+                continue;
+            // The batch's lines are too sparsely dotted for a figure this small, so the dots are laid here.
+            float[] s = segments[i];
+            int dots = Math.max(1, (int) Math.ceil(Math.hypot(s[2] - s[0], s[3] - s[1]) / DIGIT_DOT_SPACING));
+            for (int k = 0; k <= dots; k++) {
+                float t = k / (float) dots;
+                batch.dot(s[0] + (s[2] - s[0]) * t, s[1] + (s[3] - s[1]) * t, c.x(), c.y(), c.z(), a);
+            }
+        }
     }
 
     // ---- Mouse and keys ----
@@ -1352,6 +1529,17 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         boolean show_brush = !map_mode && getGUIRoot().getModalDelegate() == null
                 && (has_cursor || (brush_course && !course.isEmpty()))
                 && (campaign == null || !campaign.isPicking() || campaign.isPickingArea());
+        // Spawns float on the sea, where ships start from them.
+        boolean spawn_cursor = show_brush && has_cursor && brush == Brush.SPAWN && !campaign_active;
+        if (!spawns.isEmpty() || spawn_cursor) {
+            try (BrushRenderer.Batch batch = brush_renderer.beginAbove(renderer, model_view, projection,
+                    world.getHeightMap().getSeaLevelMeters())) {
+                drawSpawns(batch);
+                // Where a click puts the chosen player's spawn.
+                if (spawn_cursor)
+                    drawSpawn(batch, cursor_x, cursor_y, spawn_player, .5f, true);
+            }
+        }
         if (!show_brush && campaign == null)
             return;
         try (BrushRenderer.Batch batch = brush_renderer.begin(renderer, model_view, projection)) {
@@ -1379,6 +1567,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 batch.dot(cursor_x, cursor_y, r, g, b, .9f);
                 return;
             }
+            if (brush == Brush.SPAWN && !campaign_active)
+                return;
             batch.circle(cursor_x, cursor_y, radius, r, g, b, .9f);
             batch.dot(cursor_x, cursor_y, r, g, b, .9f);
             if ((brush.isDragShape() || brush == Brush.STRETCH) && stroke_sign != 0 && !campaign_active) {
@@ -1510,10 +1700,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             MapFile.Resources current = currentResources();
             float[][] heights = editor.copyHeights();
             // The preview shows the map as it is, even what is generated again from the settings.
-            MapPreview preview = MapPreview.render(heights, settings, current);
+            MapPreview preview = MapPreview.render(heights, settings, current, spawns);
             try {
                 new MapFile(name, settings, keep_heights ? heights : null, resources_edited ? current : null,
-                        preview, new_description).save(dir);
+                        preview, new_description, spawns).save(dir);
             } catch (IOException e) {
                 getGUIRoot().addModalForm(new MessageForm(MapEditor.i18n("save_failed", e.getMessage())));
                 return;
@@ -1527,6 +1717,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
             edited = keep_heights;
             editor.markSaved();
             resources_modified = false;
+            spawns_modified = false;
             getGUIRoot().getInfoPrinter().print(MapEditor.i18n("saved", name));
         }));
     }
@@ -1551,12 +1742,14 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         float[][] heights = editor.copyHeights();
         level.heights = keep_heights ? heights : null;
         level.resources = resources_edited ? current : null;
-        level.preview = MapPreview.render(heights, settings, current);
-        if (editor.isModified() || resources_modified || tools.getLayer().isModified())
+        level.spawns = spawns;
+        level.preview = MapPreview.render(heights, settings, current, spawns);
+        if (editor.isModified() || resources_modified || spawns_modified || tools.getLayer().isModified())
             level_session.markModified();
         edited = keep_heights;
         editor.markSaved();
         resources_modified = false;
+        spawns_modified = false;
         tools.getLayer().markSaved();
     }
 
@@ -1673,7 +1866,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
     }
 
     private boolean isModified() {
-        if (editor.isModified() || resources_modified)
+        if (editor.isModified() || resources_modified || spawns_modified)
             return true;
         return campaign != null && (campaign.getLayer().isModified() || campaign.getSession().isModified());
     }
@@ -1802,6 +1995,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         sync = new_sync;
         link.set(new_sync);
         scenario_sync = campaign != null ? new ScenarioSync(campaign.getLayer()) : null;
+        spawn_sync = new SpawnSync();
         RemoteEditors others = new RemoteEditors(this, editor.getSize());
         others.setRosterTop(rosterTop());
         remotes = others;
@@ -1818,6 +2012,7 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         moving = false;
         sync = null;
         scenario_sync = null;
+        spawn_sync = null;
         link.set(null);
         if (campaign != null)
             campaign.getScenario().setIdSlot(-1);
@@ -1883,6 +2078,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
         if (scenario_op != null)
             sent += current.sendEdit(SessionMessage.encode(SessionMessage.SCENARIO, currentLevel(),
                     scenario_op.encode()));
+        SpawnSync spawn_edits = spawn_sync;
+        byte[] spawn_op = spawn_edits != null ? spawn_edits.take(spawns) : null;
+        if (spawn_op != null)
+            sent += current.sendEdit(SessionMessage.encode(SessionMessage.SPAWNS, currentLevel(), spawn_op));
         send_interval = Math.max(SEND_INTERVAL, sent / SEND_RATE);
     }
 
@@ -2022,6 +2221,13 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                         if (objects != null && level == currentLevel())
                             objects.apply(ScenarioSync.Op.decode(SessionMessage.payload(message)));
                     }
+                    case SessionMessage.SPAWNS -> {
+                        SpawnSync spawn_edits = spawn_sync;
+                        if (spawn_edits != null && level == currentLevel()) {
+                            spawns = spawn_edits.apply(spawns, SessionMessage.payload(message), editor.getSize());
+                            spawns_modified = true;
+                        }
+                    }
                     case SessionMessage.SWITCH_LEVEL, SessionMessage.ADD_LEVEL -> {
                         EditorSession current = session;
                         if (campaign == null || current == null)
@@ -2057,6 +2263,8 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 sync.acknowledged();
             else if (kind == SessionMessage.SCENARIO && scenario_sync != null)
                 scenario_sync.acknowledged();
+            else if (kind == SessionMessage.SPAWNS && spawn_sync != null)
+                spawn_sync.acknowledged();
         }
 
         @Override
@@ -2077,10 +2285,10 @@ final class MapEditorDelegate extends CameraDelegate<Camera> implements CameraHo
                 CampaignSession level_session = tools.getSession();
                 CampaignFile.Level stored = level_session.getLevel();
                 return level_session.file.toSharedBytes(level_session.level, new CampaignFile.Level(settings,
-                        editor.copyHeights(), currentResources(), stored.preview, tools.getScenario()));
+                        editor.copyHeights(), currentResources(), stored.preview, spawns, tools.getScenario()));
             }
             return new MapFile(map_name != null ? map_name : "", settings, editor.copyHeights(), currentResources(),
-                    null, description).toBytes();
+                    null, description, spawns).toBytes();
         }
 
         @Override

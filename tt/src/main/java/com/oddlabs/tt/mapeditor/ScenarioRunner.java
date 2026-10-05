@@ -90,16 +90,19 @@ final class ScenarioRunner {
     private final Map<Integer, SceneryModel> placed_statues = new HashMap<>();
     private final Map<Integer, Watch> watches = new HashMap<>();
     private final Random random = new Random(42);
+    private final @NonNull Spawns spawns;
     private @NonNull String objective;
     private boolean over;
 
     /**
      * @param difficulty the campaign difficulty, as {@link CampaignState} has it
+     * @param spawns     where tribes' cameras start and their AIs call home, for those the level gives a spawn
      */
-    ScenarioRunner(@NonNull WorldViewer viewer, @NonNull Scenario scenario, int difficulty,
+    ScenarioRunner(@NonNull WorldViewer viewer, @NonNull Scenario scenario, int difficulty, @NonNull Spawns spawns,
             @NonNull Outcome outcome) {
         this.viewer = viewer;
         this.scenario = scenario;
+        this.spawns = spawns;
         this.difficulty = difficulty;
         this.outcome = outcome;
         this.objective = scenario.objective;
@@ -249,10 +252,16 @@ final class ScenarioRunner {
     }
 
     /**
-     * Where a player's camera starts and its AI sends units home to: its quarters, else its chieftain, else its
-     * first unit or building.
+     * Where a player's camera starts and its AI sends units home to: its spawn, else its quarters, else its chieftain,
+     * else its first unit or building.
      */
     private void placeStart(@NonNull Player player, int index) {
+        int[] spawn = spawns.get(index);
+        if (spawn != null) {
+            player.setStartX(UnitGrid.coordinateFromGrid(spawn[0]));
+            player.setStartY(UnitGrid.coordinateFromGrid(spawn[1]));
+            return;
+        }
         Scenario.Placement first = null;
         Scenario.Placement best = null;
         for (Scenario.Placement placement : scenario.placements) {

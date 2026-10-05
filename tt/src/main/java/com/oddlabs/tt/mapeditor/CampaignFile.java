@@ -26,8 +26,8 @@ import java.util.zip.GZIPOutputStream;
  * saves it plus the level's {@link Scenario}.
  *
  * <p>The file is a gzipped stream of the magic, a version, the description, the level count, each level's title (so
- * listing campaigns reads little), and then per level the map as {@link MapFile#writeBody} writes it at
- * {@link #MAP_VERSION}, and the scenario. The campaign's name is the file name.
+ * listing campaigns reads little), and then per level the map as {@link MapFile#writeBody} writes it at the map
+ * version that goes with the campaign's version, and the scenario. The campaign's name is the file name.
  */
 final class CampaignFile {
     static final String EXTENSION = ".ttcampaign";
@@ -35,11 +35,13 @@ final class CampaignFile {
     private static final int MAGIC = 0x54_54_43_50; // "TTCP"
     // A campaign handed over in a shared session.
     private static final int SHARED_MAGIC = 0x54_54_43_53; // "TTCS"
-    private static final int VERSION = 1;
+    // Version 2 keeps the levels' spawns.
+    private static final int VERSION = 2;
     private static final int MAX_LEVELS = 1000;
-    // The map version the levels' islands are kept in. The file does not say, so it stays at what campaigns were
-    // first saved with; a level has its briefing rather than a map's description.
-    private static final int MAP_VERSION = 3;
+    // The map version the levels' islands are kept in, by campaign version from 1. The file does not say, so it
+    // follows the campaign's version; a level has its briefing rather than a map's description.
+    private static final int[] MAP_VERSIONS = {3, 5};
+    private static final int MAP_VERSION = MAP_VERSIONS[VERSION - 1];
 
     /** One level: an island and what happens on it. */
     static final class Level {
@@ -47,20 +49,24 @@ final class CampaignFile {
         float @Nullable [] @Nullable [] heights;
         MapFile.@Nullable Resources resources;
         @Nullable MapPreview preview;
+        // Where each tribe's camera starts and its AI calls home, for the tribes that have one.
+        @NonNull Spawns spawns;
         @NonNull Scenario scenario;
 
         Level(@NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
-                MapFile.@Nullable Resources resources, @Nullable MapPreview preview, @NonNull Scenario scenario) {
+                MapFile.@Nullable Resources resources, @Nullable MapPreview preview, @NonNull Spawns spawns,
+                @NonNull Scenario scenario) {
             this.settings = settings;
             this.heights = heights;
             this.resources = resources;
             this.preview = preview;
+            this.spawns = spawns;
             this.scenario = scenario;
         }
 
         /** A level on a saved map, or on an island made from settings when the map is null. */
         static @NonNull Level of(@NonNull MapFile map, @NonNull String title) {
-            return new Level(map.settings(), map.heights(), map.resources(), map.preview(),
+            return new Level(map.settings(), map.heights(), map.resources(), map.preview(), map.spawns(),
                     Scenario.createDefault(title));
         }
     }
@@ -114,18 +120,23 @@ final class CampaignFile {
     }
 
     private static void writeLevel(@NonNull DataOutputStream out, @NonNull Level level) throws IOException {
-        new MapFile("", level.settings, level.heights, level.resources, level.preview).writeBody(out, MAP_VERSION);
+        new MapFile("", level.settings, level.heights, level.resources, level.preview, "", level.spawns).writeBody(
+                out, MAP_VERSION);
         level.scenario.write(out);
     }
 
     static @NonNull CampaignFile load(@NonNull Path path) throws IOException {
-        try (var in = open(path)) {
-            return readContents(in, nameOf(path));
+        try (var opened = open(path)) {
+            return readContents(opened.in(), opened.version(), nameOf(path));
         }
     }
 
-    /** Reads what {@link #writeContents} wrote after the magic and version, which {@link #open} has read. */
-    private static @NonNull CampaignFile readContents(@NonNull DataInputStream in, @NonNull String name)
+    /**
+     * Reads what {@link #writeContents} wrote after the magic and version, which {@link #open} has read.
+     *
+     * @param version the campaign version read
+     */
+    private static @NonNull CampaignFile readContents(@NonNull DataInputStream in, int version, @NonNull String name)
             throws IOException {
         String description = in.readUTF();
         int count = readLevelCount(in);
@@ -133,7 +144,7 @@ final class CampaignFile {
             in.readUTF();
         List<Level> levels = new ArrayList<>(count);
         for (int i = 0; i < count; i++)
-            levels.add(readLevel(in));
+            levels.add(readLevel(in, mapVersion(version)));
         return new CampaignFile(name, description, levels);
     }
 
@@ -165,8 +176,8 @@ final class CampaignFile {
                 throw new IOException("Not a shared campaign");
             String name = in.readUTF();
             int current = in.readInt();
-            readHeader(in);
-            CampaignFile file = readContents(in, name);
+            int version = readHeader(in);
+            CampaignFile file = readContents(in, version, name);
             if (current < 0 || current >= file.levels.size())
                 throw new IOException("The campaign has no level " + (current + 1));
             return new Shared(file, current);
@@ -185,13 +196,16 @@ final class CampaignFile {
     static @NonNull Level levelFromBytes(byte @NonNull [] data) throws IOException {
         try (var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(
                 new ByteArrayInputStream(data))))) {
-            return readLevel(in);
+            // Passed within a session, so written by this same build.
+            return readLevel(in, MAP_VERSION);
         }
     }
 
     /** Reads one level, skipping the ones before it. */
     static @NonNull Level loadLevel(@NonNull Path path, int index) throws IOException {
-        try (var in = open(path)) {
+        try (var opened = open(path)) {
+            DataInputStream in = opened.in();
+            int map_version = mapVersion(opened.version());
             in.readUTF();
             int count = readLevelCount(in);
             if (index < 0 || index >= count)
@@ -199,15 +213,20 @@ final class CampaignFile {
             for (int i = 0; i < count; i++)
                 in.readUTF();
             for (int i = 0; i < index; i++)
-                readLevel(in);
-            return readLevel(in);
+                readLevel(in, map_version);
+            return readLevel(in, map_version);
         }
     }
 
-    private static @NonNull Level readLevel(@NonNull DataInputStream in) throws IOException {
-        MapFile map = MapFile.readBody(in, MAP_VERSION, "");
+    private static @NonNull Level readLevel(@NonNull DataInputStream in, int map_version) throws IOException {
+        MapFile map = MapFile.readBody(in, map_version, "");
         Scenario scenario = Scenario.read(in);
-        return new Level(map.settings(), map.heights(), map.resources(), map.preview(), scenario);
+        return new Level(map.settings(), map.heights(), map.resources(), map.preview(), map.spawns(), scenario);
+    }
+
+    /** The map version a campaign version keeps its levels' islands in. */
+    private static int mapVersion(int version) {
+        return MAP_VERSIONS[version - 1];
     }
 
     /** Lists the saved campaigns, newest first, skipping any file that cannot be read. */
@@ -219,7 +238,8 @@ final class CampaignFile {
             for (Path path : (Iterable<Path>) files::iterator) {
                 if (!path.getFileName().toString().endsWith(EXTENSION) || !Files.isRegularFile(path))
                     continue;
-                try (var in = open(path)) {
+                try (var opened = open(path)) {
+                    DataInputStream in = opened.in();
                     String description = in.readUTF();
                     int count = readLevelCount(in);
                     List<String> titles = new ArrayList<>(count);
@@ -245,23 +265,32 @@ final class CampaignFile {
         return count;
     }
 
-    private static @NonNull DataInputStream open(@NonNull Path path) throws IOException {
+    /** A campaign file opened past its magic, and the version it has. */
+    private record Opened(@NonNull DataInputStream in, int version) implements AutoCloseable {
+        @Override
+        public void close() throws IOException {
+            in.close();
+        }
+    }
+
+    private static @NonNull Opened open(@NonNull Path path) throws IOException {
         var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(path))));
         try {
-            readHeader(in);
-            return in;
+            return new Opened(in, readHeader(in));
         } catch (IOException e) {
             in.close();
             throw e;
         }
     }
 
-    private static void readHeader(@NonNull DataInputStream in) throws IOException {
+    /** @return the campaign version */
+    private static int readHeader(@NonNull DataInputStream in) throws IOException {
         if (in.readInt() != MAGIC)
             throw new IOException("Not a campaign file");
         int version = in.readInt();
         if (version < 1 || version > VERSION)
             throw new IOException("Unsupported campaign version " + version);
+        return version;
     }
 
     private static @NonNull String nameOf(@NonNull Path path) {

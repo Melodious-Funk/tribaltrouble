@@ -119,7 +119,8 @@ final class OriginalLevel {
     /** The level as the campaign editor keeps it. */
     CampaignFile.@NonNull Level toLevel() {
         return new CampaignFile.Level(settings, geometry.heights(), geometry.resources(),
-                MapPreview.render(geometry.heights(), settings, geometry.resources()), scenario);
+                MapPreview.render(geometry.heights(), settings, geometry.resources(), Spawns.NONE), Spawns.NONE,
+                scenario);
     }
 
     // ---- Texts ----

@@ -4,7 +4,10 @@ import com.oddlabs.tt.procedural.Landscape;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-/** The brushes, in dropdown order: terrain shaping in one dropdown, then resource painting in the other. */
+/**
+ * The brushes, in dropdown order: terrain shaping in one dropdown, then resource painting in the other, then the
+ * spawn tool, which has a dropdown of players instead.
+ */
 enum Brush {
     HEIGHT("brush_height", "hint_height", null),
     FLATTEN("brush_flatten", "hint_flatten", null),
@@ -35,7 +38,9 @@ enum Brush {
     ROCK("brush_rock", "hint_rock", Resource.ROCK),
     IRON("brush_iron", "hint_iron", Resource.IRON),
     /** Clears every kind of resource under the brush. */
-    ERASE("brush_erase", "hint_erase", null);
+    ERASE("brush_erase", "hint_erase", null),
+    /** Puts a player's spawn where clicked, or takes one away. */
+    SPAWN("tool_spawns", "hint_spawn", null);
 
     private final @NonNull String name_key;
     private final @NonNull String hint_key;
@@ -69,6 +74,11 @@ enum Brush {
     /** Paths, rivers and ridges follow a course clicked out a point at a time, and are laid when it is done. */
     boolean isCourse() {
         return this == PATH || this == RIVER || this == MOUNTAIN;
+    }
+
+    /** Whether this is a terrain brush, from the terrain dropdown. */
+    boolean isTerrainBrush() {
+        return !isResourceBrush() && this != SPAWN;
     }
 
     /** Whether this brush works on resources rather than on the terrain. */

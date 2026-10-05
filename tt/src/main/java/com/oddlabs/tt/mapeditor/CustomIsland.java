@@ -89,7 +89,7 @@ final class CustomIsland extends Island {
     protected void start() {
         WorldViewer viewer = getViewer();
         ScenarioRunner runner = new ScenarioRunner(viewer, getScenario(), campaign.getState().getDifficulty(),
-                new ScenarioRunner.Outcome() {
+                campaign.getLevel(index).spawns, new ScenarioRunner.Outcome() {
                     @Override
                     public void victory() {
                         campaign.levelWon(viewer, index);

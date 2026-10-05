@@ -1,5 +1,6 @@
 package com.oddlabs.tt.procedural;
 
+import com.oddlabs.matchmaking.MatchmakingServerInterface;
 import com.oddlabs.procedural.Channel;
 import com.oddlabs.procedural.Layer;
 import com.oddlabs.procedural.Tools;
@@ -144,6 +145,8 @@ public final class Landscape {
     private byte @NonNull [] @NonNull [] dock;
     private byte @NonNull [] @NonNull [] water;
     private float @NonNull [] @NonNull [] player_locations;
+    // Where each player's ships start, in meters, for a player whose spawn is in the sea; null for the others.
+    private float @Nullable [] @NonNull [] ship_locations;
     private int @NonNull [] @NonNull [] supply_locations;
     private float @NonNull [] @NonNull [] plants;
 
@@ -161,7 +164,20 @@ public final class Landscape {
             float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
             float random_start_pos, boolean archipelago, @Nullable LandscapeOverride override) {
         this(num_players, meters_per_world, terrain, detail_alpha_value, hills, vegetation_amount, supplies_amount,
-                seed, initial_unit_count, random_start_pos, archipelago, override, true);
+                seed, initial_unit_count, random_start_pos, archipelago, override, null, true);
+    }
+
+    /**
+     * @param override heights and resources to build the island with instead of generating them, or null
+     * @param spawns   the grid position ({x, y}) each player starts near, null for one whose place is generated, or
+     *                 null to generate them all
+     */
+    public Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
+            float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
+            float random_start_pos, boolean archipelago, @Nullable LandscapeOverride override,
+            int @Nullable [] @Nullable [] spawns) {
+        this(num_players, meters_per_world, terrain, detail_alpha_value, hills, vegetation_amount, supplies_amount,
+                seed, initial_unit_count, random_start_pos, archipelago, override, spawns, true);
     }
 
     /**
@@ -173,13 +189,14 @@ public final class Landscape {
             @NonNull TerrainType terrain, float hills, float vegetation_amount, float supplies_amount, int seed,
             int initial_unit_count) {
         return new Landscape(num_players, meters_per_world, terrain, 0f, hills, vegetation_amount, supplies_amount,
-                seed, initial_unit_count, 0f, false, null, false);
+                seed, initial_unit_count, 0f, false, null, null, false);
     }
 
     /** @param textured whether to make the blend infos, whose textures need OpenGL */
     private Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
             float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
-            float random_start_pos, boolean archipelago, @Nullable LandscapeOverride override, boolean textured) {
+            float random_start_pos, boolean archipelago, @Nullable LandscapeOverride override,
+            int @Nullable [] @Nullable [] spawns, boolean textured) {
         this.textured = textured;
         this.terrain = terrain;
         this.fixed_resources = override != null ? override.resources() : null;
@@ -323,7 +340,7 @@ public final class Landscape {
         progress();
         Channel grass_alpha = generateAlphas();
         progress();
-        generateUnitLocations(initial_unit_count, random_start_pos);
+        generateUnitLocations(initial_unit_count, random_start_pos, spawns);
         generateSupplies(grass_alpha);
 
         // scale height map vertically
@@ -1329,7 +1346,12 @@ public final class Landscape {
     // ******************
     // * UNIT LOCATIONS *
     // ******************
-    private void generateUnitLocations(int initial_unit_count, float random_start_pos) {
+    /**
+     * @param spawns the grid position each player starts near instead of its place on the ring, null for one that
+     *               keeps its place, or null for all to; the players placed there keep their places in the shuffle
+     */
+    private void generateUnitLocations(int initial_unit_count, float random_start_pos,
+            int @Nullable [] @Nullable [] spawns) {
         // create building placement map
         Channel buildmap = new Channel(access.width, access.height);
         Channel buildmap_debug = new Channel(access.width, access.height);
@@ -1345,6 +1367,7 @@ public final class Landscape {
         if (DEBUG) buildmap_debug.toLayer().saveAsPNG("buildmap_debug");
         // find initial starting locations
         player_locations = new float[num_players][2 * initial_unit_count];
+        ship_locations = new float[num_players][];
         supply_locations = new int[num_players][2];
         float angle = 0.5f * (float) Math.PI;
         angle += random_start_pos * (float) Math.PI * 2; // random start for multiplayer games
@@ -1353,10 +1376,17 @@ public final class Landscape {
         int scale = meters_per_world / unit_grids_per_world;
         int[] location_quarters = new int[2];
         int[] location_armory = new int[2];
+        int[][] targets = new int[num_players][];
         for (int i = 0; i < num_players; i++) {
-            int x = (int) (radius * (float) Math.cos(angle) + (unit_grids_per_world >> 1) + 0.5f);
-            int y = (int) (radius * (float) Math.sin(angle) + (unit_grids_per_world >> 1) + 0.5f);
+            targets[i] = new int[]{(int) (radius * (float) Math.cos(angle) + (unit_grids_per_world >> 1) + 0.5f),
+                    (int) (radius * (float) Math.sin(angle) + (unit_grids_per_world >> 1) + 0.5f)};
             angle += angle_step;
+        }
+        if (spawns != null)
+            placeAtSpawns(targets, spawns, angle, radius);
+        for (int i = 0; i < num_players; i++) {
+            int x = targets[i][0];
+            int y = targets[i][1];
             if (archipelago) {
                 var loc = deep_water_map.find(unit_grids_per_world >> 1, x, y, 1f);
                 for (int u = 0; u < initial_unit_count; u++) {
@@ -1364,6 +1394,21 @@ public final class Landscape {
                     player_locations[i][2 * u + 1] = (loc[1] * scale);
                 }
             } else {
+                // A spawn in the sea: ships start there in a game with ships, and the units on the nearest shore.
+                int[] shore = null;
+                boolean spawned = spawns != null && i < spawns.length && spawns[i] != null;
+                if (spawned && height.getPixel(x, y) <= Globals.SEA_LEVEL) {
+                    int[] deep = water_map.getPixel(x, y) > .5f ? deep_water_map.find(unit_grids_per_world >> 1, x,
+                            y, 1f) : null;
+                    if (deep != null && deep[0] >= 0)
+                        ship_locations[i] = new float[]{deep[0] * scale, deep[1] * scale};
+                    int[] found = access.findNoWrap(unit_grids_per_world >> 1, x, y, 1f);
+                    if (found[0] >= 0) {
+                        shore = found;
+                        x = shore[0];
+                        y = shore[1];
+                    }
+                }
                 location_quarters = buildmap.findNoWrap((unit_grids_per_world >> 1), x, y, 1f);
                 // A map from the editor may leave no room for quarters anywhere, or no walkable ground at all; the
                 // units then start on the nearest walkable ground, or where they would have looked for it.
@@ -1383,9 +1428,8 @@ public final class Landscape {
                         buildmap.putPixelWrap(location_armory[0] + k, location_armory[1] + l, 0f);
                     }
                 }
-                int[] location_unit_start;
-                location_unit_start = orElse(access.find((unit_grids_per_world >> 1), location_quarters[0],
-                        location_quarters[1], 1f), location_quarters[0], location_quarters[1]);
+                int[] location_unit_start = shore != null ? shore : orElse(access.find((unit_grids_per_world >> 1),
+                        location_quarters[0], location_quarters[1], 1f), location_quarters[0], location_quarters[1]);
                 supply_locations[i][0] = location_armory[0];
                 supply_locations[i][1] = location_armory[1];
                 int[] location_unit = new int[2];
@@ -1399,11 +1443,65 @@ public final class Landscape {
             }
         }
 
-        // shuffle player starting locations
-        List<float[]> player_locations_list = Arrays.asList(player_locations);
+        // shuffle player starting locations, those on a spawn of their own staying there
+        List<Integer> unspawned = new ArrayList<>();
+        for (int i = 0; i < num_players; i++) {
+            if (spawns == null || i >= spawns.length || spawns[i] == null)
+                unspawned.add(i);
+        }
+        List<float[]> player_locations_list = new ArrayList<>();
+        for (int i : unspawned)
+            player_locations_list.add(player_locations[i]);
         Collections.shuffle(player_locations_list, random);
+        for (int k = 0; k < unspawned.size(); k++)
+            player_locations[unspawned.get(k)] = player_locations_list.get(k);
     }
 
+
+    /**
+     * Puts the players with a spawn at it, and those without at the places on the ring farthest from the spawns and
+     * from each other, as their places on the ring may be next to a spawn.
+     *
+     * @param targets each player's place on the ring, replaced by where it starts
+     */
+    private void placeAtSpawns(int @NonNull [] @NonNull [] targets, int @Nullable [] @NonNull [] spawns, float angle,
+            float radius) {
+        List<int[]> taken = new ArrayList<>();
+        for (int i = 0; i < targets.length; i++) {
+            int[] spawn = i < spawns.length ? spawns[i] : null;
+            if (spawn != null) {
+                targets[i] = new int[]{Math.clamp(spawn[0], 0, unit_grids_per_world - 1),
+                        Math.clamp(spawn[1], 0, unit_grids_per_world - 1)};
+                taken.add(targets[i]);
+            }
+        }
+        if (taken.isEmpty())
+            return;
+        int candidates = 4 * MatchmakingServerInterface.MAX_PLAYERS;
+        for (int i = 0; i < targets.length; i++) {
+            if (i < spawns.length && spawns[i] != null)
+                continue;
+            int[] best = targets[i];
+            float best_distance = -1f;
+            for (int k = 0; k < candidates; k++) {
+                float a = angle + k * 2f * (float) Math.PI / candidates;
+                int[] candidate = {(int) (radius * (float) Math.cos(a) + (unit_grids_per_world >> 1) + 0.5f),
+                        (int) (radius * (float) Math.sin(a) + (unit_grids_per_world >> 1) + 0.5f)};
+                float nearest = Float.MAX_VALUE;
+                for (int[] other : taken) {
+                    float dx = candidate[0] - other[0];
+                    float dy = candidate[1] - other[1];
+                    nearest = Math.min(nearest, dx * dx + dy * dy);
+                }
+                if (nearest > best_distance) {
+                    best_distance = nearest;
+                    best = candidate;
+                }
+            }
+            targets[i] = best;
+            taken.add(best);
+        }
+    }
 
     /** A cell a search found, or the given one when it found none. */
     private static int @NonNull [] orElse(int @NonNull [] found, int x, int y) {
@@ -1579,6 +1677,11 @@ public final class Landscape {
 
     public float[][] getStartingLocations() {
         return player_locations;
+    }
+
+    /** Where each player's ships start, in meters, for players whose spawn is in the sea; null for the others. */
+    public float @Nullable [] @NonNull [] getShipLocations() {
+        return ship_locations;
     }
 
     public float getSeaLevelMeters() {

@@ -49,9 +49,9 @@ final class BrushRenderer {
         private final @NonNull ScopedState state;
 
         private Batch(@NonNull LandscapeRenderer landscape, @NonNull MatrixStack model_view,
-                @NonNull MatrixStack projection) {
+                @NonNull MatrixStack projection, float min_height) {
             context = Renderer.getRenderer().getRenderContext();
-            state = decal_renderer.setup(context, landscape, model_view, projection);
+            state = decal_renderer.setup(context, landscape, model_view, projection, min_height);
         }
 
         /** A circle of dots, in meters. */
@@ -94,6 +94,12 @@ final class BrushRenderer {
 
     @NonNull Batch begin(@NonNull LandscapeRenderer landscape, @NonNull MatrixStack model_view,
             @NonNull MatrixStack projection) {
-        return new Batch(landscape, model_view, projection);
+        return new Batch(landscape, model_view, projection, -Float.MAX_VALUE);
+    }
+
+    /** A batch of dots that lie on the sea's surface where the ground is below it. */
+    @NonNull Batch beginAbove(@NonNull LandscapeRenderer landscape, @NonNull MatrixStack model_view,
+            @NonNull MatrixStack projection, float sea_level) {
+        return new Batch(landscape, model_view, projection, sea_level);
     }
 }

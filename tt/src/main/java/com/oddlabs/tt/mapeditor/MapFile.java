@@ -25,18 +25,20 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 /**
- * A saved editor map: the generator settings and a description plus, once edited, the whole height map and the
- * resources.
+ * A saved editor map: the generator settings and a description plus, once edited, the whole height map, the
+ * resources and the players' spawns.
  *
  * <p>What was never edited is generated again from the settings when the map is loaded. The file is a gzipped
  * stream of the magic, a version, the settings, whether heights, resources and a preview follow, the description,
- * an optional preview picture, an optional square grid of heights in meters, and optionally the grid positions of
- * each kind of resource. The description and preview come before the heights so browsing maps reads little of each
- * file. Version 1 files have no resources, versions before 3 no preview, nor the flags for them, and versions before
- * 4 no description.
+ * the spawns, an optional preview picture, an optional square grid of heights in meters, and optionally the grid
+ * positions of each kind of resource. The description, spawns and preview come before the heights so browsing maps
+ * reads little of each file. Version 1 files have no resources, versions before 3 no preview, nor the flags for them,
+ * versions before 4 no description, and versions before 5 no spawns. A map without spawns is written as version 4, so
+ * builds and servers from before spawns still read it.
  */
 record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
-               @Nullable Resources resources, @Nullable MapPreview preview, @NonNull String description) {
+               @Nullable Resources resources, @Nullable MapPreview preview, @NonNull String description,
+               @NonNull Spawns spawns) {
     static final String EXTENSION = ".ttmap";
     /** The newest map version, which {@link #writeBody} writes. */
     static final int BODY_VERSION = MapFileHeader.VERSION;
@@ -51,10 +53,10 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
             description = description.substring(0, MAX_DESCRIPTION_LENGTH);
     }
 
-    /** A map without a description. */
+    /** A map without a description or spawns. */
     MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nullable [] @Nullable [] heights,
             @Nullable Resources resources, @Nullable MapPreview preview) {
-        this(name, settings, heights, resources, preview, "");
+        this(name, settings, heights, resources, preview, "", Spawns.NONE);
     }
 
     /** Grid positions of every resource, one list per kind in {@link Resource} order. */
@@ -65,9 +67,14 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
     }
     private static final int MAX_NAME_LENGTH = 48;
 
-    /** A saved map as listed in the load dialog, without reading its heights. */
+    /**
+     * A saved map as listed in the load dialog, without reading its heights.
+     *
+     * @param edited whether it keeps heights, resources or spawns of its own
+     * @param spawns how many players' spawns it has
+     */
     record Entry(@NonNull String name, @NonNull Path path, @NonNull MapSettings settings, boolean edited,
-                 @NonNull String description, @NonNull FileTime modified) {
+                 @NonNull String description, int spawns, @NonNull FileTime modified) {
     }
 
     static int getMaxNameLength() {
@@ -122,10 +129,12 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
     }
 
     private void write(@NonNull OutputStream stream) throws IOException {
+        // Only spawns need version 5; without them the map stays readable where version 5 is not known yet.
+        int version = spawns.isEmpty() ? 4 : VERSION;
         try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(stream)))) {
             out.writeInt(MAGIC);
-            out.writeInt(VERSION);
-            writeBody(out, VERSION);
+            out.writeInt(version);
+            writeBody(out, version);
         }
     }
 
@@ -133,7 +142,7 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
      * Writes everything after the magic and version, as a campaign file also keeps its levels.
      *
      * @param version the map version to write, from 3, the first with all the flags, to {@link #BODY_VERSION}; a
-     *                version before 4 leaves out the description
+     *                version before 4 leaves out the description, and one before 5 the spawns
      */
     void writeBody(@NonNull DataOutputStream out, int version) throws IOException {
         if (version < 3 || version > BODY_VERSION)
@@ -144,6 +153,8 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         out.writeBoolean(preview != null);
         if (version >= 4)
             out.writeUTF(description);
+        if (version >= 5)
+            spawns.write(out);
         if (preview != null) {
             out.writeShort(preview.size());
             out.write(preview.rgb());
@@ -189,6 +200,7 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         boolean has_resources = version >= 2 && in.readBoolean();
         boolean has_preview = version >= 3 && in.readBoolean();
         String description = readDescription(in, version);
+        Spawns spawns = readSpawns(in, version, settings);
         MapPreview preview = has_preview ? readPreview(in) : null;
         float[][] heights = null;
         if (has_heights) {
@@ -223,8 +235,8 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
             resources = new Resources(positions);
         }
         if (preview == null && heights != null)
-            preview = MapPreview.render(heights, settings, resources);
-        return new MapFile(name, settings, heights, resources, preview, description);
+            preview = MapPreview.render(heights, settings, resources, spawns);
+        return new MapFile(name, settings, heights, resources, preview, description, spawns);
     }
 
     private static @NonNull String readDescription(@NonNull DataInputStream in, int version) throws IOException {
@@ -245,17 +257,23 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
         boolean has_heights;
         try (var in = open(path)) {
             int version = readVersion(in);
-            readSettings(in);
+            MapSettings settings = readSettings(in);
             has_heights = in.readBoolean();
             if (version >= 2)
                 in.readBoolean(); // Whether resources follow; they come after the preview.
             boolean has_preview = version >= 3 && in.readBoolean();
             readDescription(in, version);
+            readSpawns(in, version, settings);
             if (has_preview)
                 return readPreview(in);
         }
         // Older maps have no preview of their own; drawing one needs the heights.
         return has_heights ? load(path).preview() : null;
+    }
+
+    private static @NonNull Spawns readSpawns(@NonNull DataInputStream in, int version, @NonNull MapSettings settings)
+            throws IOException {
+        return version >= 5 ? Spawns.read(in, gridSize(settings)) : Spawns.NONE;
     }
 
     private static @NonNull MapPreview readPreview(@NonNull DataInputStream in) throws IOException {
@@ -285,7 +303,8 @@ record MapFile(@NonNull String name, @NonNull MapSettings settings, float @Nulla
                     if (version >= 3)
                         in.readBoolean(); // Whether a preview follows; the description comes first.
                     String description = readDescription(in, version);
-                    entries.add(new Entry(nameOf(path), path, settings, edited, description,
+                    int spawns = readSpawns(in, version, settings).count();
+                    entries.add(new Entry(nameOf(path), path, settings, edited || spawns > 0, description, spawns,
                             Files.getLastModifiedTime(path)));
                 } catch (IOException e) {
                     IO.println("Skipping unreadable map " + path + ": " + e);
