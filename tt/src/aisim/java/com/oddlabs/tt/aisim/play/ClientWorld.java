@@ -94,6 +94,11 @@ record ClientWorld(@NonNull World world, @NonNull Landscape landscape) implement
         float trees = job.trees() / 10f;
         float supplies = job.supplies() / 10f;
         int landscape_seed = landscapeSeed(job);
+        if (Headless.ENABLED) {
+            // the same game state without the textures, which only the client's GPU bake reads
+            return Landscape.generateHeadless(job.slots(), job.meters(), job.terrainType(), hills, trees, supplies,
+                    landscape_seed, STARTING_UNITS, 0f, false);
+        }
         return new Landscape(job.slots(), job.meters(), job.terrainType(), detailAlpha(), hills, trees, supplies,
                 landscape_seed, STARTING_UNITS, 0f, false);
     }

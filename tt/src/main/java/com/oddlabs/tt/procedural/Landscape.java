@@ -19,6 +19,7 @@ import com.oddlabs.util.Utils;
 import org.joml.Vector3f;
 import org.joml.Vector4fc;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.opengl.GL11;
 
 import com.oddlabs.tt.landscape.IslandInfo;
@@ -30,6 +31,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 
 public final class Landscape {
@@ -88,12 +90,16 @@ public final class Landscape {
 
     private static final int MIN_ISLAND_AREA = 2000;
 
+    private static final String NO_TEXTURES = "a headless landscape has no textures";
+
     private final @NonNull Random random;
+    // False for generateHeadless: the work that only paints the terrain is skipped.
+    private final boolean textures;
     private final @NonNull BlendInfo @NonNull [] blend_infos;
     // A separate layer for static shadows of trees, rocks, irons, ... etc.
-    private final @NonNull StructureBlend supply_shadows;
+    private final @Nullable StructureBlend supply_shadows;
     // Anothere separate layer for the landscape shadows (hills, mountains, .. etc).
-    private final @NonNull StructureBlend terrain_shadows;
+    private final @Nullable StructureBlend terrain_shadows;
 
     private record StructureLayers(Layer diffuse, Layer normal) {
     }
@@ -163,6 +169,26 @@ public final class Landscape {
     public Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
             float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
             float random_start_pos, boolean archipelago) {
+        this(num_players, meters_per_world, terrain, detail_alpha_value, hills, vegetation_amount, supplies_amount, seed, initial_unit_count, random_start_pos, archipelago, true);
+    }
+
+    /**
+     * The game state of a landscape without its textures: every getter the simulation reads returns what the
+     * constructor's landscape returns, and the blend infos, shadow layers and detail texture are missing. The skipped
+     * work (structure textures, lighting, shadows, alpha images) reads the terrain and writes only textures, and
+     * never draws from the seeded random.
+     */
+    public static @NonNull Landscape generateHeadless(int num_players, int meters_per_world,
+            @NonNull TerrainType terrain, float hills, float vegetation_amount, float supplies_amount, int seed,
+            int initial_unit_count, float random_start_pos, boolean archipelago) {
+        return new Landscape(num_players, meters_per_world, terrain, 0f, hills, vegetation_amount, supplies_amount,
+                seed, initial_unit_count, random_start_pos, archipelago, false);
+    }
+
+    private Landscape(int num_players, int meters_per_world, @NonNull TerrainType terrain, float detail_alpha_value,
+            float hills, float vegetation_amount, float supplies_amount, int seed, int initial_unit_count,
+            float random_start_pos, boolean archipelago, boolean textures) {
+        this.textures = textures;
         this.terrain = terrain;
         hills = (float) Math.sqrt(hills);
         this.num_players = num_players;
@@ -233,40 +259,50 @@ public final class Landscape {
         max_iron = max_trees >> 4;
         random = new Random(seed);
 
-        // generate shared voronoi and noise maps
-        float c1 = -1f;
-        float c2 = 1f;
-        float c3 = 0f;
-        Voronoi voronoi;
-        Channel voronoi4 = new Voronoi(structure_size, 4, 4, 1, 1f, STRUCTURE_SEED).getDistance(c1, c2, c3);
-        voronoi = new Voronoi(structure_size, 8, 8, 1, 1f, STRUCTURE_SEED);
-        Channel voronoi8 = voronoi.getDistance(c1, c2, c3);
-        Channel voronoi8_hit = voronoi.getHitpoint();
-        voronoi = new Voronoi(structure_size, 16, 16, 1, 1f, STRUCTURE_SEED);
-        Channel voronoi16 = voronoi.getDistance(c1, c2, c3);
-        Channel voronoi16_hit = voronoi.getHitpoint();
-        voronoi = new Voronoi(structure_size, 32, 32, 1, 1f, STRUCTURE_SEED);
-        Channel voronoi32 = voronoi.getDistance(c1, c2, c3);
-        Channel voronoi32_hit = voronoi.getHitpoint();
-        Channel noise8 = new Midpoint(structure_size, 3, 0.45f, STRUCTURE_SEED).toChannel();
-        Channel noise256 = new Midpoint(structure_size, 8, 1f, STRUCTURE_SEED).toChannel();
+        StructureLayers[] layers;
+        if (textures) {
+            // generate shared voronoi and noise maps
+            float c1 = -1f;
+            float c2 = 1f;
+            float c3 = 0f;
+            Voronoi voronoi;
+            Channel voronoi4 = new Voronoi(structure_size, 4, 4, 1, 1f, STRUCTURE_SEED).getDistance(c1, c2, c3);
+            voronoi = new Voronoi(structure_size, 8, 8, 1, 1f, STRUCTURE_SEED);
+            Channel voronoi8 = voronoi.getDistance(c1, c2, c3);
+            Channel voronoi8_hit = voronoi.getHitpoint();
+            voronoi = new Voronoi(structure_size, 16, 16, 1, 1f, STRUCTURE_SEED);
+            Channel voronoi16 = voronoi.getDistance(c1, c2, c3);
+            Channel voronoi16_hit = voronoi.getHitpoint();
+            voronoi = new Voronoi(structure_size, 32, 32, 1, 1f, STRUCTURE_SEED);
+            Channel voronoi32 = voronoi.getDistance(c1, c2, c3);
+            Channel voronoi32_hit = voronoi.getHitpoint();
+            Channel noise8 = new Midpoint(structure_size, 3, 0.45f, STRUCTURE_SEED).toChannel();
+            Channel noise256 = new Midpoint(structure_size, 8, 1f, STRUCTURE_SEED).toChannel();
 
-        StructureLayers[] layers = switch (terrain) {
-            case NATIVE -> {
-                var natives = generateStructuresNative(voronoi4, voronoi8, voronoi8_hit, voronoi16, voronoi16_hit,
-                        voronoi32, voronoi32_hit, noise8, noise256);
-                ProgressForm.progress();
-                generateTerrainNative();
-                yield natives;
+            layers = switch (terrain) {
+                case NATIVE -> {
+                    var natives = generateStructuresNative(voronoi4, voronoi8, voronoi8_hit, voronoi16, voronoi16_hit,
+                            voronoi32, voronoi32_hit, noise8, noise256);
+                    ProgressForm.progress();
+                    generateTerrainNative();
+                    yield natives;
+                }
+                case VIKING -> {
+                    var vikings = generateStructuresViking(voronoi4, voronoi8, voronoi8_hit, voronoi16, voronoi16_hit,
+                            voronoi32, voronoi32_hit, noise8, noise256);
+                    ProgressForm.progress();
+                    generateTerrainViking();
+                    yield vikings;
+                }
+            };
+        } else {
+            // the structure textures depend only on STRUCTURE_SEED and never feed the terrain
+            layers = new StructureLayers[0];
+            switch (terrain) {
+                case NATIVE -> generateTerrainNative();
+                case VIKING -> generateTerrainViking();
             }
-            case VIKING -> {
-                var vikings = generateStructuresViking(voronoi4, voronoi8, voronoi8_hit, voronoi16, voronoi16_hit,
-                        voronoi32, voronoi32_hit, noise8, noise256);
-                ProgressForm.progress();
-                generateTerrainViking();
-                yield vikings;
-            }
-        };
+        }
 
         island_ids = access.copy();
         int last_id = 2;
@@ -313,6 +349,13 @@ public final class Landscape {
         }
 
         if (DEBUG) access.toLayer().saveAsPNG("access_connected");
+
+        if (!textures) {
+            blend_infos = new BlendInfo[0];
+            terrain_shadows = null;
+            supply_shadows = null;
+            return;
+        }
 
         // create blend infos
         blend_infos = new BlendInfo[]{new StructureBlend(structures[0], structure_normals[0], new GLByteImage(
@@ -848,10 +891,12 @@ public final class Landscape {
                 if (DEBUG) alpha2.toLayer().saveAsPNG("alpha_rock");
                 alpha3 = generateGrassAlpha(unit_grids_per_world, seed);
                 if (DEBUG) alpha3.toLayer().saveAsPNG("alpha_grass");
-                alpha_maps[0] = new GLByteImage(alpha0, GL11.GL_RED);
-                alpha_maps[1] = new GLByteImage(alpha1, GL11.GL_RED);
-                alpha_maps[2] = new GLByteImage(alpha2, GL11.GL_RED);
-                alpha_maps[3] = new GLByteImage(alpha3, GL11.GL_RED);
+                if (textures) {
+                    alpha_maps[0] = new GLByteImage(alpha0, GL11.GL_RED);
+                    alpha_maps[1] = new GLByteImage(alpha1, GL11.GL_RED);
+                    alpha_maps[2] = new GLByteImage(alpha2, GL11.GL_RED);
+                    alpha_maps[3] = new GLByteImage(alpha3, GL11.GL_RED);
+                }
                 ground = groundGrid(new Ground[]{Ground.DIRT, Ground.ROCK, Ground.ROCK, Ground.GRASS}, alpha0,
                         alpha1, alpha2, alpha3);
                 yield alpha3;
@@ -865,15 +910,22 @@ public final class Landscape {
                 if (DEBUG) alpha2.toLayer().saveAsPNG("alpha_grass");
                 alpha3 = Landscape.generateSnowAlpha(height, alpha1.copy());
                 if (DEBUG) alpha3.toLayer().saveAsPNG("alpha_snow");
-                alpha_maps[0] = new GLByteImage(alpha0, GL11.GL_RED);
-                alpha_maps[1] = new GLByteImage(alpha1, GL11.GL_RED);
-                alpha_maps[2] = new GLByteImage(alpha2, GL11.GL_RED);
-                alpha_maps[3] = new GLByteImage(alpha3, GL11.GL_RED);
+                if (textures) {
+                    alpha_maps[0] = new GLByteImage(alpha0, GL11.GL_RED);
+                    alpha_maps[1] = new GLByteImage(alpha1, GL11.GL_RED);
+                    alpha_maps[2] = new GLByteImage(alpha2, GL11.GL_RED);
+                    alpha_maps[3] = new GLByteImage(alpha3, GL11.GL_RED);
+                }
                 ground = groundGrid(new Ground[]{Ground.DIRT, Ground.ROCK, Ground.GRASS, Ground.SNOW}, alpha0,
                         alpha1, alpha2, alpha3);
                 yield alpha2;
             }
         };
+
+        if (!textures) {
+            // the rest is lighting and shadows; the supplies only read the grass alpha
+            return grass_alpha;
+        }
 
         Channel seabottom_alpha = Landscape.generateSeabottomAlpha(terrain, height, height_scale);
         if (DEBUG) seabottom_alpha.toLayer().saveAsPNG("alpha_seabottom");
@@ -1098,13 +1150,15 @@ public final class Landscape {
         // place rock
         rock = placeSupplies(rock_channel, supplies, 64, (int) (supplies_amount * max_rock), 0f);
         access.channelSubtract(rock);
-        supply_shadow.channelBrightest(rock.copy().multiply(0.5f));
+        if (textures)
+            supply_shadow.channelBrightest(rock.copy().multiply(0.5f));
         if (DEBUG) rock.toLayer().saveAsPNG("supplies_rock_placed");
 
         // place iron
         iron = placeSupplies(iron_channel, supplies, 64, (int) (supplies_amount * max_iron), 0f);
         access.channelSubtract(iron);
-        supply_shadow.channelBrightest(iron.copy().multiply(0.5f));
+        if (textures)
+            supply_shadow.channelBrightest(iron.copy().multiply(0.5f));
         if (DEBUG) iron.toLayer().saveAsPNG("supplies_iron_placed");
 
         if (DEBUG) {
@@ -1134,10 +1188,12 @@ public final class Landscape {
             }
         }
 
-        alpha_maps[4] = new GLByteImage(highlight, GL11.GL_RED);
-        alpha_maps[5] = new GLByteImage(shadow, GL11.GL_RED);
-        if (DEBUG) supply_shadow.toLayer().saveAsPNG("alpha_supply_shadow");
-        alpha_maps[7] = new GLByteImage(supply_shadow, GL11.GL_RED);
+        if (textures) {
+            alpha_maps[4] = new GLByteImage(highlight, GL11.GL_RED);
+            alpha_maps[5] = new GLByteImage(shadow, GL11.GL_RED);
+            if (DEBUG) supply_shadow.toLayer().saveAsPNG("alpha_supply_shadow");
+            alpha_maps[7] = new GLByteImage(supply_shadow, GL11.GL_RED);
+        }
         ProgressForm.progress(1 / 14f);
 
         // generate plant maps
@@ -1228,7 +1284,7 @@ public final class Landscape {
                         ) {
                             place.putPixel(x, y, 1f);
                             // place shadow
-                            if (shadow_alpha_val > 0f) {
+                            if (textures && shadow_alpha_val > 0f) {
                                 int x_pixel = (x - supplyshadow_size + 1) >> scaleshift;
                                 int y_pixel = (y - supplyshadow_size + 1) >> scaleshift;
                                 supply_shadow.placeBrightest(supplyshadow_alpha2, x_pixel, y_pixel);
@@ -1429,11 +1485,11 @@ public final class Landscape {
     }
 
     public @NonNull StructureBlend getSupplyShadows() {
-        return supply_shadows;
+        return Objects.requireNonNull(supply_shadows, NO_TEXTURES);
     }
 
     public @NonNull StructureBlend getTerrainShadows() {
-        return terrain_shadows;
+        return Objects.requireNonNull(terrain_shadows, NO_TEXTURES);
     }
 
     public GLIntImage getDetail() {
