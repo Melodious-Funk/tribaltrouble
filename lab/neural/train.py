@@ -9,7 +9,8 @@ of this run, against the stock AIs), read the trajectories the AI wrote, and imp
 
 Run it from the repository root, after `./aisim.sh build`, with AISIM_JDK pointing at a JDK 26. State is kept under
 aisim/neural/RUN/ (git-ignored): `latest.pt` to resume from, `nets/` the exported nets, `log.jsonl` a line per
-generation. Stop it with Ctrl+C or by creating aisim/neural/RUN/STOP; start it again to go on.
+generation, `status.json` what it is doing now and `args.json` its settings. Stop it with Ctrl+C or by creating
+aisim/neural/RUN/STOP; start it again to go on. `python lab/neural/dashboard.py` shows its progress in a browser.
 lab/neural/NOTES.md explains the choices made here.
 """
 
@@ -102,6 +103,18 @@ class Trainer:
             self.stock_score = state["stock_score"]
             self.random.setstate(state["random"])
             print(f"resuming {args.run} at generation {self.generation}")
+        self.session_start = time.time()
+        self.session_first = self.generation
+        (self.dir / "args.json").write_text(json.dumps(vars(args), indent=1))
+
+    def status(self, phase: str, **more) -> None:
+        """Writes what the trainer does now, for the dashboard: the phase, and the batch it waits for."""
+        status = {"pid": os.getpid(), "phase": phase, "generation": self.generation, "time": time.time(),
+                  "session_start": self.session_start, "session_first": self.session_first,
+                  "session_generations": self.args.generations, **more}
+        temporary = self.dir / "status.tmp"
+        temporary.write_text(json.dumps(status))
+        temporary.replace(self.dir / "status.json")
 
     # ------------------------------------------------------------ the harness
 
@@ -120,6 +133,7 @@ class Trainer:
         """Plays `maps` maps from both starts and returns the result rows."""
         run_dir = ROOT / "aisim" / "runs" / name
         shutil.rmtree(run_dir, ignore_errors=True)
+        self.status("evaluating" if "-eval-" in name else "playing", batch=name, games=2 * maps, players=players)
         command = ["bash", str(ROOT / "aisim.sh"), "batch", "--name", name, "--players", players, "--seeds",
                    f"{first_seed}..{first_seed + maps - 1}", "--rng", str(self.generation), "--minutes", str(minutes),
                    "--workers", self.args.workers, "--record-every", "1" if record else "1000000", *MAP]
@@ -156,14 +170,24 @@ class Trainer:
 
     # ------------------------------------------------------------ one generation
 
-    def play(self, record: bool) -> tuple[list[dict], dict]:
-        """Plays the generation's games; returns its trajectories with their results, and per-kind scores."""
+    @staticmethod
+    def tally(rows: list[dict]) -> dict:
+        """How team A did in the counted games `rows`: games, wins, losses, draws, and those at the time limit."""
+        return {"games": len(rows), "wins": sum(row["result"] == "win" for row in rows),
+                "losses": sum(row["result"] == "loss" for row in rows),
+                "draws": sum(row["result"] == "draw" for row in rows),
+                "timeouts": sum(row.get("end") == "timeout" for row in rows),
+                "minutes": round(sum(row["t"] for row in rows) / max(1, len(rows)) / 60, 1)}
+
+    def play(self, record: bool) -> tuple[list[dict], dict, dict]:
+        """Plays the generation's games; returns its trajectories with their results, and per-kind scores and tallies."""
         g = self.generation
         trajectories = self.dir / "traj" / f"g{g:06d}"
         shutil.rmtree(trajectories, ignore_errors=True)
         trajectories.mkdir(parents=True)  # the AI writes only into a folder that is there
         games = []
         scores = {}
+        results = {}
         first_seed = self.random.randrange(TRAIN_SEEDS - 400)
         for kind, players, maps in self.lineups(trajectories):
             rows = self.batch(f"{self.args.run}-g{g:06d}-{kind}", players, first_seed, maps, record, self.args.minutes)
@@ -171,6 +195,7 @@ class Trainer:
             counted = [row for row in rows if row.get("result") is not None]
             if counted:
                 scores[kind] = sum(row["score"] for row in counted) / len(counted)
+                results[kind] = self.tally(counted)
             for row in counted:
                 for team in row["teams"]:
                     for slot in team["slots"]:
@@ -183,7 +208,7 @@ class Trainer:
                             games.append(trajectory)
             self.note(kind, counted)
         shutil.rmtree(trajectories, ignore_errors=True)
-        return games, scores
+        return games, scores, results
 
     def note(self, kind: str, rows: list[dict]) -> None:
         """Keeps the running scores that choose later opponents."""
@@ -263,16 +288,18 @@ class Trainer:
         stats["parity"] = round(parity, 6)
         return stats
 
-    def evaluate(self) -> dict:
+    def evaluate(self) -> tuple[dict, dict]:
         """The current net, choosing greedily, against each stock AI on maps training never plays."""
         scores = {}
+        results = {}
         maps = max(1, self.args.eval_games // 2)
         for name in STOCK:
             players = f"{self.spec(self.generation, None, 0, greedy=True)} vs {name}"
             rows = self.batch(f"{self.args.run}-eval-{name}", players, EVAL_SEED, maps, False, 40)
             counted = [row for row in rows if row.get("result") is not None]
             scores[name] = round(sum(row["score"] for row in counted) / max(1, len(counted)), 3)
-        return scores
+            results[name] = self.tally(counted)
+        return scores, results
 
     def save(self) -> None:
         state = {"policy": self.policy.state_dict(), "optimizer": self.optimizer.state_dict(),
@@ -292,10 +319,12 @@ class Trainer:
             started = time.time()
             self.policy.export(self.net_file(g))
             record = args.record_generations > 0 and g % args.record_generations == 0
-            games, scores = self.play(record)
+            games, scores, results = self.play(record)
             played = time.time()
-            line = {"generation": g, "games": len(games), "scores": {k: round(v, 3) for k, v in scores.items()}}
+            line = {"generation": g, "games": len(games), "scores": {k: round(v, 3) for k, v in scores.items()},
+                    "results": results}
             if games:
+                self.status("learning")
                 data = self.advantages(games)
                 line["decisions"] = int(data["advantage"].shape[0])
                 line["minutes"] = round(sum(game["length"] for game in games) / len(games) / 60, 1)
@@ -304,17 +333,35 @@ class Trainer:
                 line["units"] = round(float(last[:, 0].mean()), 1)
                 line["warriors"] = round(float(last[:, 1].mean()), 1)
                 line["kills"] = round(float(last[:, 3].mean()), 1)
+                line["buildings"] = round(float(last[:, 2].mean()), 1)
+                line["lost"] = round(float(last[:, 7].mean()), 1)
+                # the strength margin the shaped reward follows, at the last decision
+                margin = ((last[:, :4] - last[:, 4:]) / SHAPING_SCALE * SHAPING_WEIGHT).sum(1)
+                line["margin"] = round(float(margin.mean()), 4)
+                # how often each choice of each head was taken, and how well the value net foresaw the returns
+                actions = data["action"].cpu().numpy()
+                line["choices"] = [[round(float(share), 4) for share in
+                                    np.bincount(actions[:, head], minlength=size) / max(1, len(actions))]
+                                   for head, size in enumerate(self.policy.head_sizes)]
+                target_variance = data["target"].var().item()
+                line["explained_variance"] = round(1 - data["advantage"].var().item() / target_variance, 4) \
+                    if target_variance > 0 else 0.0
                 line.update(self.improve(data))
             if args.eval_generations > 0 and g % args.eval_generations == 0:
-                line["eval"] = self.evaluate()
+                line["eval"], line["eval_results"] = self.evaluate()
             if args.snapshot_generations > 0 and g % args.snapshot_generations == 0:
                 self.league.append({"generation": g, "games": 0.0, "wins": 0.0})
             else:
                 keep = {entry["generation"] for entry in self.league}
                 if g not in keep:
                     self.net_file(g).unlink(missing_ok=True)
+            line["league"] = [{"generation": entry["generation"],
+                               "score": round(entry["wins"] / entry["games"], 3) if entry["games"] > 0 else None}
+                              for entry in self.league]
+            line["stock_score"] = {name: round(score, 3) for name, score in self.stock_score.items()}
             line["play_s"] = round(played - started, 1)
             line["learn_s"] = round(time.time() - played, 1)
+            line["time"] = round(time.time(), 1)
             self.generation += 1
             self.save()
             with open(self.dir / "log.jsonl", "a") as log:
@@ -332,7 +379,11 @@ def main():
     np.random.seed(args.seed)
     if not math.isfinite(args.lr) or args.lr <= 0:
         sys.exit("--lr must be positive")
-    Trainer(args).run()
+    trainer = Trainer(args)
+    try:
+        trainer.run()
+    finally:
+        trainer.status("stopped")
 
 
 if __name__ == "__main__":

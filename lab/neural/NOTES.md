@@ -66,6 +66,19 @@ aisim/venv/bin/python lab/neural/train.py --run first --generations 200 --games 
 ./aisim.sh play --players "neural vs easy"                           # no net: a uniformly random policy
 ```
 
+To follow a run in a browser (charts of every number below, and what the trainer is doing right now):
+
+```bash
+python3 lab/neural/dashboard.py            # opens http://localhost:8642 and reads aisim/neural/*/ every 5 s
+```
+
+It needs only Python's standard library and reads `log.jsonl` (a line per generation), `status.json` (the phase and
+the batch the trainer waits for) and `args.json` (the settings), which `train.py` writes. Besides the scores, a
+log line has the results per opponent (`results`: games, wins, losses, draws, those at the time limit), how often
+each choice of each head was taken (`choices`), the value net's explained variance, the strength margin at the end
+of a game, the league's scores and the usual PPO numbers. Runs logged before 2026-11-11 lack some of these, and the
+page says so in their charts.
+
 `train.py` resumes from `aisim/neural/RUN/latest.pt`; `aisim/neural/RUN/STOP` stops it after the generation. It calls
 `bash aisim.sh`, so on Windows start it from Git Bash. While it runs, do not edit `.java` files without rebuilding:
 every batch refuses a stale build.
