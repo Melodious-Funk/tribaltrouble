@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neural AI training</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11, 11, 11, .10);
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
+    --ord-1: #86b6ef; --ord-2: #5598e7; --ord-3: #2a78d6; --ord-4: #1c5cab; --ord-5: #104281;
+    --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --neutral: #c3c2b7;
+    --delta-good: #006300; --delta-bad: #b02a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19;
+      --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, .10);
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+      --ord-1: #184f95; --ord-2: #256abf; --ord-3: #3987e5; --ord-4: #6da7ec; --ord-5: #9ec5f4;
+      --neutral: #52514e; --delta-good: #0ca30c; --delta-bad: #e66767;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, .10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+    --ord-1: #184f95; --ord-2: #256abf; --ord-3: #3987e5; --ord-4: #6da7ec; --ord-5: #9ec5f4;
+    --neutral: #52514e; --delta-good: #0ca30c; --delta-bad: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--page); color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1500px; margin: 0 auto; padding: 16px 16px 48px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  h2 { font-size: 15px; margin: 28px 0 4px; font-weight: 650; }
+  .lede { color: var(--text-secondary); margin: 0 0 10px; max-width: 95ch; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin: 12px 0; }
+  .filters label { color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
+  select, button { font: inherit; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  button { cursor: pointer; }
+  button:hover, select:hover { border-color: var(--axis); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+    position: relative; min-width: 0; margin: 0; }
+  #status { display: flex; gap: 12px; align-items: flex-start; }
+  #status .icon { font-size: 18px; line-height: 1.2; }
+  #status .what { font-weight: 650; }
+  #status .detail { color: var(--text-secondary); }
+  #status code, .watch code { background: var(--page); border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 5px; font: 12.5px ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .meter { height: 8px; border-radius: 4px; background: var(--grid); margin-top: 8px; max-width: 420px;
+    overflow: hidden; }
+  .meter > div { height: 100%; background: var(--series-1); border-radius: 4px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-top: 12px; }
+  .tile .label { color: var(--text-secondary); font-size: 13px; }
+  .tile .value { font-size: 26px; font-weight: 650; line-height: 1.2; margin-top: 2px; }
+  .tile.hero .value { font-size: 48px; line-height: 1.05; }
+  .tile .delta { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
+  .tile .delta .up { color: var(--delta-good); font-weight: 650; }
+  .tile .delta .down { color: var(--delta-bad); font-weight: 650; }
+  .grid { display: grid; gap: 12px; }
+  .grid.wide { grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+  .grid.small { grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
+  .card header { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+  .card .title { font-weight: 650; }
+  .card .note { color: var(--text-secondary); font-size: 12.5px; margin: 2px 0 6px; }
+  .card .toggle { font-size: 12px; padding: 1px 7px; color: var(--text-secondary); flex: none; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--text-secondary);
+    margin: 4px 0 2px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .key { width: 14px; height: 0; border-top: 2px solid; border-radius: 2px; display: inline-block; }
+  .key.box { height: 10px; width: 10px; border: 0; border-radius: 2px; }
+  svg { display: block; width: 100%; overflow: visible; }
+  svg text { font: 11.5px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--text-muted);
+    font-variant-numeric: tabular-nums; }
+  svg text.endlabel { fill: var(--text-secondary); font-size: 12px; }
+  svg:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 4px; }
+  .tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+    white-space: nowrap; z-index: 5; display: none; }
+  .tip .head { color: var(--text-secondary); margin-bottom: 2px; }
+  .tip .row { display: flex; gap: 8px; align-items: center; }
+  .tip .row b { font-variant-numeric: tabular-nums; min-width: 3.5em; }
+  .tip .row .name { color: var(--text-secondary); }
+  .empty { color: var(--text-muted); padding: 22px 0; font-size: 13px; }
+  .tablewrap { max-height: 300px; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface-1); }
+  th:first-child, td:first-child { text-align: left; }
+  table.plain th, table.plain td { text-align: left; }
+  .watch p { margin: 4px 0; }
+  .muted { color: var(--text-muted); }
+</style>
+</head>
+<body class="viz-root">
+<main>
+  <h1>Neural AI training</h1>
+  <div class="filters">
+    <label>Training run <select id="run"></select></label>
+    <label>Generations <select id="range">
+      <option value="0">all</option><option value="200">last 200</option><option value="50">last 50</option>
+    </select></label>
+    <label>Smoothing <select id="smooth">
+      <option value="1">none</option><option value="5">5 generations</option><option value="20">20 generations</option>
+    </select></label>
+    <span class="muted" id="updated"></span>
+  </div>
+  <section class="card" id="status"></section>
+  <div class="tiles" id="tiles"></div>
+  <div id="sections"></div>
+</main>
+<script>
+"use strict";
+// The choices of the policy's heads, as tt/src/main/java/com/oddlabs/tt/player/neural/Heads.java has them.
+const HEADS = [
+  {name: "Build next", options: ["nothing", "quarters", "armory", "tower"]},
+  {name: "Gatherers on wood / rock / iron / rubber", options: ["5/3/2/0", "5/1/4/0", "7/2/1/0", "4/0/6/0", "4/1/3/2"]},
+  {name: "Share of peons that gather", options: ["10%", "20%", "30%", "45%", "60%"], ordinal: true},
+  {name: "Share of the peons inside that staff the armory", options: ["25%", "45%", "65%", "85%"], ordinal: true},
+  {name: "Weapon the armory makes", options: ["rock", "iron", "rubber"]},
+  {name: "Warriors wanted, as a share of all units", options: ["0%", "15%", "30%", "50%", "70%"], ordinal: true},
+  {name: "What the army does", options: ["defend", "attack", "retreat"]},
+  {name: "Chieftain", options: ["none", "train one"]},
+];
+const STOCK = ["easy", "normal", "hard"];
+// colour follows the opponent in every chart
+const OPPONENT_COLOR = {easy: "var(--series-1)", normal: "var(--series-2)", hard: "var(--series-3)",
+  "earlier nets": "var(--series-4)", "self-play": "var(--series-5)"};
+const SVG = "http://www.w3.org/2000/svg";
+const view = {run: null, log: [], status: null, args: null, kept: [], nets: 0, root: "", range: 0, smooth: 1,
+  tables: new Set(), drawn: ""};
+
+function el(tag, attributes, ...children) {
+  const node = tag === "svg" || el.svg ? document.createElementNS(SVG, tag) : document.createElement(tag);
+  for (const [name, value] of Object.entries(attributes || {})) {
+    if (name === "class") node.setAttribute("class", value);
+    else if (name === "text") node.textContent = value;
+    else node.setAttribute(name, value);
+  }
+  for (const child of children) if (child != null) node.append(child);
+  return node;
+}
+function svg(tag, attributes, ...children) {
+  el.svg = true;
+  try { return el(tag, attributes, ...children); } finally { el.svg = false; }
+}
+function number(value, decimals) {
+  if (value == null || Number.isNaN(value)) return "–";
+  return value.toLocaleString("en-US", {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
+}
+function compact(value) {
+  if (value >= 1e6) return number(value / 1e6, 1) + "M";
+  if (value >= 1e4) return number(value / 1e3, 1) + "K";
+  return number(value, 0);
+}
+function duration(seconds) {
+  if (seconds < 90) return Math.round(seconds) + " s";
+  if (seconds < 5400) return Math.round(seconds / 60) + " min";
+  if (seconds < 172800) return number(seconds / 3600, 1) + " h";
+  return number(seconds / 86400, 1) + " days";
+}
+function clock(epoch) {
+  return new Date(epoch * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+}
+/** Ticks at round steps covering lo..hi, about `count` of them. */
+function ticks(lo, hi, count) {
+  const span = hi - lo || 1;
+  const raw = span / count;
+  const power = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * power).find(s => s >= raw);
+  const out = [];
+  for (let t = Math.ceil(lo / step - 1e-9) * step; t <= hi + step * 1e-9; t += step) out.push(+t.toPrecision(12));
+  return out;
+}
+/** A trailing moving average over `k` points. */
+function smoothed(points, k) {
+  if (k <= 1) return points;
+  return points.map((point, i) => {
+    const from = Math.max(0, i - k + 1);
+    let sum = 0;
+    for (let j = from; j <= i; j++) sum += points[j][1];
+    return [point[0], sum / (i - from + 1)];
+  });
+}
+/** [generation, value] for the log lines where `pick` gives a number. */
+function points(lines, pick) {
+  const out = [];
+  for (const line of lines) {
+    const value = pick(line);
+    if (typeof value === "number" && Number.isFinite(value)) out.push([line.generation, value]);
+  }
+  return out;
+}
+
+/** A card: title, note, the Table / Chart toggle, and the body `draw(body, width)` fills. */
+function card(id, title, note, draw, table) {
+  const figure = el("figure", {class: "card"});
+  const toggle = table ? el("button", {class: "toggle", type: "button",
+    text: view.tables.has(id) ? "Chart" : "Table"}) : null;
+  figure.append(el("header", {}, el("div", {class: "title", text: title}), toggle));
+  if (note) figure.append(el("div", {class: "note", text: note}));
+  const body = el("div");
+  figure.append(body);
+  figure.fill = () => {
+    body.replaceChildren();
+    if (table && view.tables.has(id)) body.append(table());
+    else draw(body, figure);
+  };
+  if (toggle) toggle.addEventListener("click", () => {
+    if (view.tables.has(id)) view.tables.delete(id); else view.tables.add(id);
+    toggle.textContent = view.tables.has(id) ? "Chart" : "Table";
+    figure.fill();
+  });
+  return figure;
+}
+function dataTable(first, series, format) {
+  const xs = [...new Set(series.flatMap(s => s.points.map(p => p[0])))].sort((a, b) => a - b);
+  const table = el("table");
+  table.append(el("tr", {}, el("th", {text: first}), ...series.map(s => el("th", {text: s.name}))));
+  const maps = series.map(s => new Map(s.points));
+  for (const x of xs) {
+    table.append(el("tr", {}, el("td", {text: String(x)}),
+      ...maps.map(m => el("td", {text: m.has(x) ? format(m.get(x)) : ""}))));
+  }
+  return el("div", {class: "tablewrap"}, table);
+}
+function legend(series, box) {
+  const row = el("div", {class: "legend"});
+  for (const s of series) {
+    const key = el("i", {class: box ? "key box" : "key"});
+    if (box) key.style.background = s.color; else key.style.borderTopColor = s.color;
+    row.append(el("span", {}, key, el("span", {text: s.name})));
+  }
+  return row;
+}
+
+/**
+ * A line chart of series {name, color, points: [[generation, value]]} on one axis: hairline grid, 2 px lines, end
+ * markers and end labels, a crosshair with every series' value at the generation under the pointer (or the arrow
+ * keys), and a table view.
+ */
+function lineChart(id, o) {
+  const series = o.series.filter(s => s.points.length > 0);
+  const format = o.format || (v => number(v, o.decimals ?? 2));
+  const table = () => dataTable("generation", o.series, format);
+  return card(id, o.title, o.note, (body, figure) => {
+    if (series.length === 0) {
+      body.append(el("div", {class: "empty", text: o.empty || "No data for these generations."}));
+      return;
+    }
+    // one of several possible series still gets its name: the title names them all
+    if (o.series.length > 1) body.append(legend(series));
+    const width = Math.max(240, body.clientWidth);
+    const height = o.height || 230;
+    // end labels where the card is wide enough for them beside the plot; the legend names every series anyway
+    const wanted = 16 + 6.8 * Math.max(...series.map(s => s.name.length));
+    const labelled = series.length > 1 && series.length <= 5 && width - wanted >= 300;
+    const label_room = labelled ? wanted : 14;
+    const m = {left: 44, right: label_room, top: 10, bottom: 24};
+    const all = series.flatMap(s => s.points);
+    let x0 = Math.min(...all.map(p => p[0])), x1 = Math.max(...all.map(p => p[0]));
+    if (x0 === x1) { x0 -= 1; x1 += 1; }
+    let y0 = o.min, y1 = o.max;
+    if (y0 == null || y1 == null) {
+      const lo = Math.min(...all.map(p => p[1])), hi = Math.max(...all.map(p => p[1]));
+      const pad = (hi - lo || Math.abs(hi) || 1) * 0.08;
+      if (y0 == null) y0 = lo >= 0 && lo < 0.35 * hi ? 0 : lo - pad;
+      if (y1 == null) y1 = hi + pad;
+    }
+    const y_ticks = ticks(y0, y1, 4);
+    // a tick is written with the decimals its step needs: 3.25, not 3.3
+    const step = y_ticks.length > 1 ? y_ticks[1] - y_ticks[0] : 1;
+    let tick_decimals = o.decimals ?? 2;
+    while (tick_decimals < 6 && Math.abs(step * 10 ** tick_decimals - Math.round(step * 10 ** tick_decimals)) > 1e-6) {
+      tick_decimals++;
+    }
+    const tick_format = o.format || (v => number(v, tick_decimals));
+    if (o.min == null) y0 = Math.min(y0, y_ticks[0]);
+    if (o.max == null) y1 = Math.max(y1, y_ticks[y_ticks.length - 1]);
+    const X = x => m.left + (x - x0) / (x1 - x0) * (width - m.left - m.right);
+    const Y = y => m.top + (1 - (y - y0) / (y1 - y0)) * (height - m.top - m.bottom);
+    const root = svg("svg", {viewBox: `0 0 ${width} ${height}`, height, role: "img", tabindex: "0",
+      "aria-label": o.title + ". Arrow keys read the values."});
+    for (const t of y_ticks) {
+      root.append(svg("line", {x1: m.left, x2: width - m.right, y1: Y(t), y2: Y(t), stroke: "var(--grid)"}));
+      root.append(svg("text", {x: m.left - 6, y: Y(t) + 4, "text-anchor": "end", text: tick_format(t)}));
+    }
+    root.append(svg("line", {x1: m.left, x2: width - m.right, y1: height - m.bottom, y2: height - m.bottom,
+      stroke: "var(--axis)"}));
+    const x_ticks = ticks(x0, x1, Math.max(2, Math.floor((width - m.left - m.right) / 90)))
+      .filter(t => Number.isInteger(t) && t >= x0 && t <= x1);
+    for (const t of x_ticks) {
+      root.append(svg("text", {x: X(t), y: height - 6, "text-anchor": "middle", text: String(t)}));
+    }
+    const ends = [];
+    for (const s of series) {
+      const path = s.points.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)).join("");
+      root.append(svg("path", {d: path, fill: "none", stroke: s.color, "stroke-width": 2,
+        "stroke-linejoin": "round", "stroke-linecap": "round"}));
+      // few points (an evaluation every tenth generation): each one a marker; else only the end
+      const marked = s.points.length <= 40 ? s.points : s.points.slice(-1);
+      for (const p of marked) {
+        root.append(svg("circle", {cx: X(p[0]), cy: Y(p[1]), r: 4, fill: s.color, stroke: "var(--surface-1)",
+          "stroke-width": 2}));
+      }
+      const last = s.points[s.points.length - 1];
+      ends.push({name: s.name, x: X(last[0]), y: Y(last[1])});
+    }
+    // and only where they do not collide
+    ends.sort((a, b) => a.y - b.y);
+    const clear = ends.every((e, i) => i === 0 || e.y - ends[i - 1].y >= 14);
+    if (labelled && clear) {
+      for (const e of ends) {
+        root.append(svg("text", {class: "endlabel", x: e.x + 9, y: e.y + 4, text: e.name}));
+      }
+    }
+    const hair = svg("line", {y1: m.top, y2: height - m.bottom, stroke: "var(--axis)", visibility: "hidden"});
+    root.append(hair);
+    body.append(root);
+    const tip = el("div", {class: "tip"});
+    figure.append(tip);
+    const xs = [...new Set(all.map(p => p[0]))].sort((a, b) => a - b);
+    const maps = series.map(s => new Map(s.points));
+    let at = -1;
+    const show = index => {
+      at = Math.max(0, Math.min(xs.length - 1, index));
+      const x = xs[at];
+      hair.setAttribute("x1", X(x));
+      hair.setAttribute("x2", X(x));
+      hair.setAttribute("visibility", "visible");
+      tip.replaceChildren(el("div", {class: "head", text: "generation " + x}));
+      series.forEach((s, i) => {
+        if (!maps[i].has(x)) return;
+        const key = el("i", {class: "key"});
+        key.style.borderTopColor = s.color;
+        tip.append(el("div", {class: "row"}, key, el("b", {text: format(maps[i].get(x))}),
+          el("span", {class: "name", text: s.name})));
+      });
+      tip.style.display = "block";
+      const box = root.getBoundingClientRect(), frame = figure.getBoundingClientRect();
+      const left = box.left - frame.left + X(x) * box.width / width;
+      const flip = left + tip.offsetWidth + 16 > frame.width;
+      tip.style.left = (flip ? left - tip.offsetWidth - 10 : left + 10) + "px";
+      tip.style.top = (box.top - frame.top + m.top) + "px";
+    };
+    const hide = () => { tip.style.display = "none"; hair.setAttribute("visibility", "hidden"); at = -1; };
+    root.addEventListener("pointermove", event => {
+      const box = root.getBoundingClientRect();
+      const x = x0 + ((event.clientX - box.left) * width / box.width - m.left) / (width - m.left - m.right) * (x1 - x0);
+      let best = 0;
+      xs.forEach((value, i) => { if (Math.abs(value - x) < Math.abs(xs[best] - x)) best = i; });
+      show(best);
+    });
+    root.addEventListener("pointerleave", hide);
+    root.addEventListener("focus", () => show(xs.length - 1));
+    root.addEventListener("blur", hide);
+    root.addEventListener("keydown", event => {
+      if (event.key === "ArrowLeft") { show((at < 0 ? xs.length : at) - 1); event.preventDefault(); }
+      if (event.key === "ArrowRight") { show(at + 1); event.preventDefault(); }
+    });
+  }, table);
+}
+
+/**
+ * Stacked bars of shares over the generations, binned so that a bar stays thin: parts {name, color}, rows
+ * [generation, [count per part]].
+ */
+function stackChart(id, o) {
+  const table = () => dataTable("generation", o.parts.map((part, i) => ({name: part.name,
+    points: o.rows.map(row => [row[0], row[1][i]])})), v => number(v, 0));
+  return card(id, o.title, o.note, (body, figure) => {
+    if (o.rows.length === 0) {
+      body.append(el("div", {class: "empty", text: o.empty || "No data for these generations."}));
+      return;
+    }
+    body.append(legend(o.parts, true));
+    const width = Math.max(240, body.clientWidth), height = 230;
+    const m = {left: 44, right: 14, top: 10, bottom: 24};
+    const plot = width - m.left - m.right;
+    const per = Math.ceil(o.rows.length / Math.max(1, Math.floor(plot / 16)));
+    const bins = [];
+    for (let i = 0; i < o.rows.length; i += per) {
+      const rows = o.rows.slice(i, i + per);
+      bins.push({from: rows[0][0], to: rows[rows.length - 1][0],
+        counts: o.parts.map((_, part) => rows.reduce((sum, row) => sum + row[1][part], 0))});
+    }
+    const slot = plot / bins.length, bar = Math.min(24, Math.max(3, slot - 4));
+    const Y = share => m.top + (1 - share) * (height - m.top - m.bottom);
+    const root = svg("svg", {viewBox: `0 0 ${width} ${height}`, height, role: "img", "aria-label": o.title});
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      root.append(svg("line", {x1: m.left, x2: width - m.right, y1: Y(t), y2: Y(t),
+        stroke: t === 0 ? "var(--axis)" : "var(--grid)"}));
+      root.append(svg("text", {x: m.left - 6, y: Y(t) + 4, "text-anchor": "end", text: Math.round(t * 100) + "%"}));
+    }
+    const tip = el("div", {class: "tip"});
+    figure.append(tip);
+    const label_every = Math.ceil(70 / slot);
+    bins.forEach((bin, index) => {
+      const total = bin.counts.reduce((a, b) => a + b, 0);
+      const x = m.left + slot * index + (slot - bar) / 2;
+      const group = svg("g", {tabindex: "0"});
+      let below = 0;
+      const drawn = bin.counts.map((count, part) => ({count, part})).filter(d => d.count > 0);
+      drawn.forEach((d, i) => {
+        const share = d.count / total;
+        const top = Y(below + share), bottom = Y(below);
+        // a 2 px gap in the surface colour between the parts; only the top of the stack is rounded
+        const h = Math.max(1, bottom - top - (i < drawn.length - 1 ? 2 : 0)), y = bottom - h;
+        const r = i === drawn.length - 1 ? Math.min(4, bar / 2, h) : 0;
+        group.append(svg("path", {fill: o.parts[d.part].color,
+          d: `M${x} ${y + h}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + bar - r}Q${x + bar} ${y} ${x + bar} ${y + r}V${y + h}Z`}));
+        below += share;
+      });
+      // the whole slot is the bar's hit area
+      group.append(svg("rect", {x: m.left + slot * index, y: m.top, width: slot, height: height - m.top - m.bottom,
+        fill: "transparent"}));
+      const show = () => {
+        const name = bin.from === bin.to ? "generation " + bin.from : `generations ${bin.from} to ${bin.to}`;
+        tip.replaceChildren(el("div", {class: "head", text: `${name}: ${total} games`}));
+        o.parts.forEach((part, i) => {
+          const key = el("i", {class: "key box"});
+          key.style.background = part.color;
+          tip.append(el("div", {class: "row"}, key,
+            el("b", {text: total ? Math.round(100 * bin.counts[i] / total) + "%" : "–"}),
+            el("span", {class: "name", text: `${part.name} (${bin.counts[i]})`})));
+        });
+        tip.style.display = "block";
+        const box = root.getBoundingClientRect(), frame = figure.getBoundingClientRect();
+        const left = box.left - frame.left + (x + bar) * box.width / width;
+        const flip = left + tip.offsetWidth + 16 > frame.width;
+        tip.style.left = (flip ? left - bar - tip.offsetWidth - 10 : left + 10) + "px";
+        tip.style.top = (box.top - frame.top + m.top) + "px";
+        group.setAttribute("opacity", ".8");
+      };
+      const hide = () => { tip.style.display = "none"; group.removeAttribute("opacity"); };
+      group.addEventListener("pointermove", show);
+      group.addEventListener("pointerleave", hide);
+      group.addEventListener("focus", show);
+      group.addEventListener("blur", hide);
+      root.append(group);
+      if (index % label_every === 0) {
+        root.append(svg("text", {x: x + bar / 2, y: height - 6, "text-anchor": "middle", text: String(bin.from)}));
+      }
+    });
+    body.append(root);
+  }, table);
+}
+
+function tile(label, value, delta, hero) {
+  const node = el("div", {class: hero ? "card tile hero" : "card tile"},
+    el("div", {class: "label", text: label}), el("div", {class: "value", text: value}));
+  if (delta) node.append(delta);
+  return node;
+}
+function deltaLine(change, since) {
+  const node = el("div", {class: "delta"});
+  if (Math.abs(change) < 0.0005) node.append("no change " + since);
+  else node.append(el("span", {class: change > 0 ? "up" : "down",
+    text: (change > 0 ? "▲ +" : "▼ −") + number(Math.abs(change), 2)}), " " + since);
+  return node;
+}
+
+function renderStatus() {
+  const box = document.getElementById("status");
+  const status = view.status || {};
+  const last = view.log[view.log.length - 1];
+  box.replaceChildren();
+  if (!view.run) {
+    box.append(el("div", {}, el("div", {class: "what", text: "No training run yet"}),
+      el("div", {class: "detail"}, "Start one from the repository root: ",
+        el("code", {text: "aisim/venv/bin/python lab/neural/train.py --run first --generations 200 --games 400"}))));
+    return;
+  }
+  const detail = el("div", {class: "detail"});
+  if (status.running) {
+    box.append(el("div", {class: "icon", text: "▶"}));
+    const what = {playing: "playing its games", evaluating: "measuring its strength", learning: "learning from the games"};
+    let line = `Generation ${status.generation}: ${what[status.phase] || status.phase}`;
+    if (status.players) line += ` (${shortLineup(status.players)})`;
+    detail.append(line);
+    if (status.games && status.batch_done != null && status.phase !== "learning") {
+      detail.append(`: ${Math.min(status.batch_done, status.games)} of ${status.games} games of this batch`);
+      const meter = el("div", {class: "meter"}, el("div"));
+      meter.firstChild.style.width = Math.min(100, 100 * status.batch_done / status.games) + "%";
+      detail.append(meter);
+    }
+    const done = status.generation - status.session_first;
+    const more = el("div");
+    more.append(`This session: ${done} of ${status.session_generations} generations since ${clock(status.session_start)}`);
+    if (done > 0) {
+      const each = (status.now - status.session_start) / (done + 0.5);
+      const left = (status.session_generations - done) * each;
+      more.append(`, about ${duration(each)} a generation; done around ${clock(status.now + left)} (${duration(left)}).`);
+    } else more.append(".");
+    detail.append(more);
+    if (status.stop_requested) detail.append(el("div", {text: "A STOP file is there: it stops after this generation."}));
+    else detail.append(el("div", {}, "To stop it after the generation it is in: create ",
+      el("code", {text: `aisim/neural/${view.run}/STOP`}), "."));
+    box.append(el("div", {}, el("div", {class: "what", text: "Training now"}), detail));
+  } else {
+    box.append(el("div", {class: "icon", text: "■"}));
+    const when = last && last.time ? `Its last generation (${last.generation}) ended ${duration(status.now - last.time)} ago.`
+      : last ? `Its last generation is ${last.generation}.` : "It has no finished generation yet.";
+    detail.append(when + " To go on from there, from the repository root: ",
+      el("code", {text: `aisim/venv/bin/python lab/neural/train.py --run ${view.run} --generations 200`}));
+    if (status.stop_requested) detail.append(el("div", {}, "Remove ",
+      el("code", {text: `aisim/neural/${view.run}/STOP`}), " first, or it stops at once."));
+    box.append(el("div", {}, el("div", {class: "what", text: "Not training"}), detail));
+  }
+}
+/** A lineup in short: each player's name and the file its parameters name ("neural g000020 vs easy"). */
+function shortLineup(players) {
+  return players.split(/\s+/).map(word => {
+    const colon = word.indexOf(":");
+    if (colon < 0) return word;
+    for (const parameter of word.slice(colon + 1).split(",")) {
+      const value = parameter.slice(parameter.indexOf("=") + 1);
+      const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+      if (slash >= 0) return word.slice(0, colon) + " " + value.slice(slash + 1).replace(/\.[^.]*$/, "");
+    }
+    return word;
+  }).join(" ");
+}
+
+function renderTiles() {
+  const box = document.getElementById("tiles");
+  box.replaceChildren();
+  const log = view.log;
+  if (log.length === 0) return;
+  const last = log[log.length - 1];
+  box.append(tile("Generations trained", number(last.generation + 1, 0), null, true));
+  const evals = log.filter(line => line.eval);
+  if (evals.length > 0) {
+    const first = evals[0], latest = evals[evals.length - 1];
+    for (const name of STOCK) {
+      if (latest.eval[name] == null) continue;
+      const since = latest === first ? null : deltaLine(latest.eval[name] - (first.eval[name] ?? 0),
+        "since generation " + first.generation);
+      box.append(tile(`Score against ${name}, generation ${latest.generation}`, number(latest.eval[name], 2), since));
+    }
+  }
+  box.append(tile("Player-games learned from", compact(log.reduce((sum, line) => sum + (line.games || 0), 0))));
+  box.append(tile("Decisions learned from", compact(log.reduce((sum, line) => sum + (line.decisions || 0), 0))));
+  box.append(tile("Time spent training", duration(log.reduce((sum, line) => sum + (line.play_s || 0) + (line.learn_s || 0), 0))));
+  const recent = log.slice(-10).filter(line => line.results);
+  let games = 0, limit = 0;
+  for (const line of recent) for (const tally of Object.values(line.results)) { games += tally.games; limit += tally.timeouts; }
+  if (games > 0) {
+    box.append(tile("Games ending at the time limit, last 10 generations", Math.round(100 * limit / games) + "%"));
+  }
+  box.append(tile("Past nets kept as opponents", number((last.league || []).length || Math.max(0, view.nets - 1), 0)));
+}
+
+function section(parent, title, lede, kind, cards) {
+  parent.append(el("h2", {text: title}));
+  if (lede) parent.append(el("p", {class: "lede", text: lede}));
+  const grid = el("div", {class: "grid " + kind});
+  parent.append(grid);
+  for (const c of cards) grid.append(c);
+  return cards;
+}
+
+function renderCharts() {
+  const parent = document.getElementById("sections");
+  parent.replaceChildren();
+  const cards = [];
+  const all = view.log;
+  if (all.length === 0) return;
+  const log = view.range > 0 ? all.slice(-view.range) : all;
+  const k = view.smooth;
+  const averaged = k > 1 ? ` Moving average of ${k} generations.` : "";
+  const one = (id, title, note, pick, o) => lineChart(id, Object.assign({title, note,
+    series: [{name: title, color: "var(--series-1)", points: smoothed(points(log, pick), k)}], height: 190}, o));
+  const eval_games = (log.find(line => line.eval_results) || {eval_results: {}}).eval_results;
+  const per_eval = Object.values(eval_games)[0]?.games || view.args?.eval_games;
+
+  cards.push(...section(parent, "Strength", "Score is wins plus half the draws, per game: 1 wins every game, 0.5 is "
+    + "level (or every game a draw at the time limit), 0 loses every game.", "wide", [
+    lineChart("eval", {title: "Measured strength against the stock AIs",
+      note: "The net taking its most likely choice, on maps training never plays"
+        + (per_eval ? `; ${per_eval} games a point.` : "."), min: 0, max: 1,
+      series: STOCK.map(name => ({name, color: OPPONENT_COLOR[name],
+        points: points(log, line => line.eval ? line.eval[name] : null)}))}),
+    lineChart("scores", {title: "Score in its training games, by opponent",
+      note: "The net sampling its choices, as it does to explore. Against itself the score is 0.5 by construction."
+        + averaged, min: 0, max: 1,
+      series: [...STOCK, "earlier nets"].map(name => ({name, color: OPPONENT_COLOR[name],
+        points: smoothed(points(log, line => {
+          if (!line.scores) return null;
+          if (name !== "earlier nets") return line.scores[name];
+          const past = Object.entries(line.scores).filter(([kind]) => /^g\d+$/.test(kind)).map(entry => entry[1]);
+          return past.length ? past.reduce((a, b) => a + b, 0) / past.length : null;
+        }), k)}))}),
+  ]));
+
+  const tallied = log.filter(line => line.results);
+  const others = line => Object.entries(line.results).filter(([kind]) => kind !== "self").map(entry => entry[1]);
+  const share = (tallies, field) => {
+    const games = tallies.reduce((sum, t) => sum + t.games, 0);
+    return games ? tallies.reduce((sum, t) => sum + t[field], 0) / games : null;
+  };
+  const not_logged = "Not in this run's log: the trainer writes it from this version on.";
+  cards.push(...section(parent, "How its games end", "A game nobody wins within the time limit is a draw and "
+    + "teaches little: the shaped reward does the teaching until games are decided.", "wide", [
+    stackChart("outcomes", {title: "Results against other opponents",
+      note: "Games against the stock AIs and earlier nets, as shares of each bar's games.", empty: not_logged,
+      parts: [{name: "won", color: "var(--good)"}, {name: "drew", color: "var(--neutral)"},
+        {name: "lost", color: "var(--critical)"}],
+      rows: tallied.map(line => {
+        const t = others(line);
+        return [line.generation, ["wins", "draws", "losses"].map(field => t.reduce((sum, x) => sum + x[field], 0))];
+      }).filter(row => row[1].some(count => count > 0))}),
+    lineChart("limit", {title: "Share of games that reach the time limit", note: averaged.trim(), min: 0, max: 1,
+      format: v => Math.round(v * 100) + "%", empty: not_logged,
+      series: [{name: "self-play", color: OPPONENT_COLOR["self-play"],
+        points: smoothed(points(tallied, line => line.results.self ? share([line.results.self], "timeouts") : null), k)},
+        {name: "other opponents", color: "var(--series-1)",
+          points: smoothed(points(tallied, line => share(others(line), "timeouts")), k)}]}),
+    one("minutes", "Length of a game, in game minutes", "The time limit is " + (view.args?.minutes ?? 30)
+      + " minutes." + averaged, line => line.minutes, {decimals: 1, height: 230}),
+  ]));
+
+  cards.push(...section(parent, "What the learner has at the end of a game", "Averages over its games of a "
+    + "generation, from its last decision." + averaged, "small", [
+    one("units", "Units", "Of 250 at most.", line => line.units, {decimals: 0}),
+    one("warriors", "Warriors", null, line => line.warriors, {decimals: 0}),
+    one("buildings", "Buildings", "Of 20 at most.", line => line.buildings, {decimals: 1, empty: not_logged}),
+    one("kills", "Enemy units killed", null, line => line.kills, {decimals: 1}),
+    one("lost", "Units lost", null, line => line.lost, {decimals: 1, empty: not_logged}),
+    one("margin", "Strength margin", "What the shaped reward follows: own minus enemy units, warriors, buildings "
+      + "and kills, scaled.", line => line.margin, {decimals: 2, empty: not_logged}),
+  ]));
+
+  const chosen = log.filter(line => line.choices);
+  cards.push(...section(parent, "What the policy chooses", "How often each choice was taken, of all decisions of a "
+    + "generation (one every 5 game seconds). A net of random weights takes each allowed choice equally often."
+    + averaged, "small", HEADS.map((head, h) => lineChart("head" + h, {title: head.name, min: 0,
+      format: v => Math.round(v * 100) + "%", height: 190, empty: not_logged,
+      series: head.options.map((option, i) => ({name: option,
+        color: head.ordinal ? `var(--ord-${1 + Math.round(i * 4 / (head.options.length - 1))})` : `var(--series-${i + 1})`,
+        points: smoothed(points(chosen, line => line.choices[h] ? line.choices[h][i] : null), k)}))}))));
+
+  cards.push(...section(parent, "Learning signals", "PPO's own numbers for each update." + averaged, "small", [
+    one("entropy", "Entropy of the choices", "Summed over the 8 heads; about 9.1 for a net that chooses at random, "
+      + "falling as it makes up its mind.", line => line.entropy, {decimals: 2}),
+    one("kl", "Change of the policy per update (KL)", "Above about 0.03 the steps are large: lower --lr.",
+      line => line.kl, {decimals: 3}),
+    one("clipped", "Share of decisions PPO clipped", null, line => line.clipped,
+      {format: v => Math.round(v * 100) + "%", min: 0}),
+    one("ev", "Returns the value net explains", "1 foresees every return, 0 none.",
+      line => line.explained_variance, {decimals: 2, empty: not_logged}),
+    one("value_loss", "Value loss", null, line => line.value_loss, {decimals: 4}),
+    one("policy_loss", "Policy loss", null, line => line.policy_loss, {decimals: 4}),
+  ]));
+
+  cards.push(...section(parent, "Speed", null, "wide", [
+    lineChart("time", {title: "Seconds per generation", note: averaged.trim(), decimals: 0, min: 0,
+      series: [{name: "playing the games", color: "var(--series-1)", points: smoothed(points(log, line => line.play_s), k)},
+        {name: "learning and measuring", color: "var(--series-2)", points: smoothed(points(log, line => line.learn_s), k)}]}),
+    one("decisions", "Decisions per generation", averaged.trim(), line => line.decisions, {format: compact, height: 230}),
+  ]));
+
+  // tables: the league, the settings, the games there are to watch
+  const last = all[all.length - 1];
+  const league = el("figure", {class: "card"}, el("div", {class: "title", text: "Earlier nets it trains against"}),
+    el("div", {class: "note", text: "Its running score against each: those it still loses to are met more often."}));
+  if (last.league && last.league.length > 0) {
+    const table = el("table");
+    table.append(el("tr", {}, el("th", {text: "net of generation"}), el("th", {text: "score against it"})));
+    for (const entry of last.league) {
+      table.append(el("tr", {}, el("td", {text: String(entry.generation)}),
+        el("td", {text: entry.score == null ? "not met yet" : number(entry.score, 2)})));
+    }
+    league.append(el("div", {class: "tablewrap"}, table));
+  } else league.append(el("div", {class: "empty", text: last.league ? "None yet." : not_logged}));
+  const settings = el("figure", {class: "card"}, el("div", {class: "title", text: "Settings of the last session"}));
+  if (view.args) {
+    const table = el("table", {class: "plain"});
+    for (const [name, value] of Object.entries(view.args)) {
+      table.append(el("tr", {}, el("td", {text: "--" + name.replaceAll("_", "-")}), el("td", {text: String(value)})));
+    }
+    settings.append(el("div", {class: "tablewrap"}, table));
+  } else settings.append(el("div", {class: "empty", text: not_logged}));
+  const watch = el("figure", {class: "card watch"}, el("div", {class: "title", text: "Games to watch"}),
+    el("div", {class: "note", text: "The generations whose games were kept (--record-generations). In the "
+      + "viewer, G lists them all."}));
+  if (view.kept.length > 0) {
+    for (const entry of view.kept) {
+      watch.append(el("p", {}, el("code", {text: `./aisim.sh watch ${entry.name}`}),
+        el("span", {class: "muted", text: `  ${entry.games} games`})));
+    }
+  } else watch.append(el("div", {class: "empty", text: "No kept games of this run in aisim/runs."}));
+  section(parent, "The league, the settings and the games", null, "wide", [league, settings, watch]);
+
+  for (const c of cards) c.fill();
+}
+
+async function poll(reset) {
+  if (reset) { view.log = []; view.drawn = ""; }
+  let data;
+  try {
+    const query = new URLSearchParams({since: view.log.length});
+    if (view.run) query.set("run", view.run);
+    data = await (await fetch("/api/state?" + query)).json();
+  } catch (e) {
+    document.getElementById("updated").textContent = "The dashboard's server does not answer: is dashboard.py still running?";
+    return;
+  }
+  if (data.run !== view.run || data.since !== view.log.length) { view.log = []; view.drawn = ""; }
+  if (data.since !== view.log.length) { view.run = data.run; return poll(false); }
+  view.run = data.run;
+  view.log.push(...(data.log || []));
+  view.status = data.status;
+  view.args = data.args;
+  view.kept = data.kept || [];
+  view.nets = data.nets || 0;
+  view.root = data.root;
+  const select = document.getElementById("run");
+  const names = data.runs.map(run => run.name);
+  if ([...select.options].map(option => option.value).join() !== names.join()) {
+    select.replaceChildren(...names.map(name => el("option", {value: name, text: name})));
+  }
+  if (view.run) select.value = view.run;
+  document.getElementById("updated").textContent = "read " + new Date().toLocaleTimeString();
+  renderStatus();
+  // the charts are drawn again only when their data changed: a hover survives the polls in between
+  const drawn = [view.run, view.log.length, view.range, view.smooth, view.kept.length, innerWidth].join();
+  if (drawn !== view.drawn) {
+    view.drawn = drawn;
+    renderTiles();
+    renderCharts();
+  }
+}
+document.getElementById("run").addEventListener("change", event => {
+  view.run = event.target.value;
+  history.replaceState(null, "", "?run=" + encodeURIComponent(view.run));
+  poll(true);
+});
+document.getElementById("range").addEventListener("change", event => { view.range = +event.target.value; poll(false); });
+document.getElementById("smooth").addEventListener("change", event => { view.smooth = +event.target.value; poll(false); });
+let resizing;
+addEventListener("resize", () => { clearTimeout(resizing); resizing = setTimeout(() => poll(false), 200); });
+view.run = new URLSearchParams(location.search).get("run"); // a link to one run: /?run=NAME
+poll(false);
+setInterval(() => poll(false), 5000);
+</script>
+</body>
+</html>
