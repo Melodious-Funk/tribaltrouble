@@ -51,12 +51,15 @@ public final class Game {
         this.file = file;
     }
 
-    /** The counted games of {@code run} (ended by elimination or at the time limit), in results.jsonl order. */
+    /**
+     * The counted games of {@code run} (ended by elimination or at the time limit) that have a game file, in
+     * results.jsonl order: every counted game, but for those a batch with --record-every played without the recorder.
+     */
     public static @NonNull List<Game> counted(@NonNull String run) {
         Path dir = Runs.dir(run);
         List<Game> games = new ArrayList<>();
         for (Map<String, Object> row : read(() -> Runs.rows(run))) {
-            if (Runs.counts(row)) {
+            if (Runs.counts(row) && Runs.recorded(row)) {
                 games.add(new Game(run, row, Runs.gameFile(dir, row.get("key"))));
             }
         }
@@ -78,7 +81,16 @@ public final class Game {
 
     /** The game named on a command line by RUN KEY or FILE.jsonl. */
     static @NonNull Game named(@NonNull List<String> args) {
-        return args.size() == 2 ? of(args.get(0), args.get(1)) : file(Path.of(args.get(0)));
+        if (args.size() != 2) {
+            return file(Path.of(args.get(0)));
+        }
+        Game game = of(args.get(0), args.get(1));
+        if (!Runs.recorded(game.row)) {
+            throw new UsageException("game " + args.get(1) + " of " + args.get(
+                    0) + " was not recorded (--record-every); ./aisim.sh replay " + args.get(0) + " " + args.get(
+                            1) + " plays it again and records it");
+        }
+        return game;
     }
 
     /** The run of this game; null for a game file read alone. */

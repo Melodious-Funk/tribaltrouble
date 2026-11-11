@@ -135,4 +135,9 @@ public final class Runs {
     public static boolean counts(@NonNull Map<String, Object> row) {
         return row.get("result") != null;
     }
+
+    /** Whether a result row's game has a game file: false only for a game batch --record-every left unrecorded. */
+    public static boolean recorded(@NonNull Map<String, Object> row) {
+        return !Boolean.FALSE.equals(row.get("recorded"));
+    }
 }

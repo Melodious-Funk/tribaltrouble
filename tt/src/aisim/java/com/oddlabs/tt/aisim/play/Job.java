@@ -26,7 +26,7 @@ import java.util.List;
 public record Job(@NonNull String run, @NonNull String key, int seed, int side, @NonNull String players,
                   @NonNull List<Seat> seats, int size, int terrain, int hills, int trees, int supplies, int minutes,
                   @Nullable Long rng, boolean collapse, boolean stopWhenAOut, @NonNull String game,
-                  @Nullable String logs, @Nullable String speed) {
+                  @Nullable String logs, @Nullable String speed, @Nullable Boolean record) {
 
     /** Map sizes by {@link #size}, as in the skirmish menu (huge is the menu's "Enormous"). */
     public static final List<String> SIZES = List.of("small", "medium", "large", "huge");
@@ -106,6 +106,14 @@ public record Job(@NonNull String run, @NonNull String key, int seed, int side, 
     @NonNull
     String map() {
         return SIZES.get(size) + " " + TERRAINS.get(terrain) + " h" + hills + " t" + trees + " s" + supplies;
+    }
+
+    /**
+     * Whether the game is recorded to its game file. {@link #record} is null for a recorded game, as in every run
+     * before batch --record-every, and false for a game played without the recorder.
+     */
+    boolean recorded() {
+        return record == null || record;
     }
 
     /** The AI log file of {@code slot}, next to the game file; null when the job keeps no AI logs. */

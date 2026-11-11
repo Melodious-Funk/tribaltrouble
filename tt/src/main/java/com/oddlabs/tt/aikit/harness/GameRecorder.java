@@ -136,6 +136,15 @@ public final class GameRecorder implements Animated {
         return recorder;
     }
 
+    /**
+     * The recorder of a harness game that is not recorded: it writes no file and never samples the game, and only
+     * answers {@link #census} for the result row. That census has no stunned and lostInside counts, which only
+     * sampling gives.
+     */
+    public static @NonNull GameRecorder unrecorded(@NonNull World world) {
+        return new GameRecorder(world, Writer.nullWriter(), "", null);
+    }
+
     /** Starts recording a game played in the GUI; see {@link #on_gui_finish}. */
     static @NonNull GameRecorder startGui(@NonNull World world, @NonNull Writer out, @NonNull String header,
             @NonNull Consumer<GameRecorder> on_finish) {

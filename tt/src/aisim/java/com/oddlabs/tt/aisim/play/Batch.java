@@ -89,6 +89,10 @@ public final class Batch {
         if (setup.logs() != null) {
             counts += setup.logs().equals(LOGS_LOST) ? " | AI logs of the games team A did not win" : " | AI logs";
         }
+        long recorded = jobs.stream().filter(Job::recorded).count();
+        if (recorded < jobs.size()) {
+            counts += " | " + recorded + " recorded";
+        }
         if (profile) {
             counts += " | profiled";
         }

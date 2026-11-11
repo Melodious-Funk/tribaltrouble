@@ -56,6 +56,7 @@ public final class Replay {
         Path worker_log = out.resolve(key + ".worker.log");
         Files.createDirectories(out);
         job.put("game", Aisim.slash(replay_game));
+        job.remove("record"); // the replay is recorded, also of a game batch --record-every left unrecorded
         job.put("logs", Aisim.slash(out.resolve(key)));
         if (until != null) {
             job.put("minutes", until);
@@ -81,7 +82,8 @@ public final class Replay {
             return 1;
         }
         Aisim.JSON.writeValue(out.resolve(key + ".row.json").toFile(), row);
-        return verify(original_game, replay_game, original, row, same_build, until != null);
+        return verify(Runs.recorded(original) ? original_game : null, replay_game, original, row, same_build,
+                until != null);
     }
 
     /**
@@ -117,12 +119,13 @@ public final class Replay {
     /**
      * Compares a replay with the original game, sample by sample, and prints the verdict. {@code partial}: --until
      * stopped the replay early, so the final checksum is not compared. Returns 1 only when a finished game replayed
-     * on the same build differs or shares no sample with it.
+     * on the same build differs or shares no sample with it. {@code original_file} is null for a game played without
+     * the recorder, which has only its final checksum to compare.
      */
-    private static int verify(@NonNull Path original_file, @NonNull Path replay_file,
+    private static int verify(@Nullable Path original_file, @NonNull Path replay_file,
             @NonNull Map<String, Object> original, @NonNull Map<String, Object> replay, boolean same_build,
             boolean partial) throws IOException {
-        Map<String, Map<String, Object>> original_samples = samples(original_file);
+        Map<String, Map<String, Object>> original_samples = original_file == null ? Map.of() : samples(original_file);
         Map<String, Map<String, Object>> replay_samples = samples(replay_file);
         String difference = null;
         int compared = 0;
@@ -149,12 +152,14 @@ public final class Replay {
             String why = original.get("end") + ": " + original.get("problem");
             String samples = difference == null ? "match" : "differ from " + difference;
             System.out.println("the original game did not finish (" + why + "); " + compared + " samples " + samples);
-        } else if (compared == 0) {
-            System.out.println("NOT VERIFIED: the replay has no census sample in common with the game");
-            failed = same_build;
+        } else if (compared == 0 && (original_file != null || partial)) {
+            String why = original_file != null ? "the replay has no census sample in common with the game" : "the game was not recorded (--record-every), so only a whole replay can be compared";
+            System.out.println("NOT VERIFIED: " + why);
+            failed = same_build && original_file != null;
         } else if (same_build && difference == null) {
             String checksum = "checksum " + replay_checksum;
-            System.out.println("VERIFIED: the replay reproduced the game (" + compared + " samples, " + checksum + ")");
+            String samples = original_file == null ? "not recorded: " : compared + " samples, ";
+            System.out.println("VERIFIED: the replay reproduced the game (" + samples + checksum + ")");
         } else if (same_build) {
             System.out.println("MISMATCH: first difference at " + difference + "\n" + NONDETERMINISM_HINT);
             failed = true;

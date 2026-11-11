@@ -54,10 +54,17 @@ public final class Summary {
             Headline headline = Headline.of(counted);
             headline.print(out, counted);
             List<Game> games = Game.counted(run);
-            printTeams(out, counted, games.get(0));
+            printTeams(out, counted);
             printMeans(out, counted);
-            printHealth(out, counted, games.get(0));
-            printCurves(out, games);
+            printHealth(out, counted);
+            if (games.isEmpty()) {
+                out.println("no curves or milestones: no counted game of the run was recorded (--record-every)");
+            } else {
+                if (games.size() < counted.size()) {
+                    out.println("curves and milestones of the " + games.size() + " recorded games (--record-every):");
+                }
+                printCurves(out, games);
+            }
             printWorstGames(out, run, counted);
             result_line += headline.resultFields();
         }
@@ -189,8 +196,7 @@ public final class Summary {
      * Every team's record, from the row's team blocks: its players, mean score and place, how often it won alone,
      * shared first place (drew) or lost, and in how many games it went out.
      */
-    private static void printTeams(@NonNull PrintWriter out, @NonNull List<Map<String, Object>> counted,
-            @NonNull Game names) {
+    private static void printTeams(@NonNull PrintWriter out, @NonNull List<Map<String, Object>> counted) {
         List<List<String>> rows = new ArrayList<>();
         rows.add(List.of("team", "players", "score", "place", "won", "drew", "lost", "out"));
         for (int team = 0; team < blocks(counted.get(0)).size(); team++) {
@@ -209,7 +215,7 @@ public final class Summary {
                 out_count += block.get("out") != null ? 1 : 0;
             }
             int n = counted.size();
-            rows.add(List.of(names.teamName(team), String.valueOf(blocks(counted.get(0)).get(team).get("players")),
+            rows.add(List.of(teamName(team), String.valueOf(blocks(counted.get(0)).get(team).get("players")),
                     String.format(Locale.ROOT, "%.3f", score / n), String.format(Locale.ROOT, "%.2f", place / n),
                     String.valueOf(won), String.valueOf(drew), String.valueOf(n - won - drew),
                     String.valueOf(out_count)));
@@ -228,8 +234,7 @@ public final class Summary {
      * Swallowed AI errors and AI counters of each team whose AIs reported any, and a warning when the recorder stopped
      * early.
      */
-    private static void printHealth(@NonNull PrintWriter out, @NonNull List<Map<String, Object>> counted,
-            @NonNull Game names) {
+    private static void printHealth(@NonNull PrintWriter out, @NonNull List<Map<String, Object>> counted) {
         boolean any = false;
         for (int team = 0; team < blocks(counted.get(0)).size(); team++) {
             String errors = swallowedErrors(counted, team);
@@ -238,7 +243,7 @@ public final class Summary {
                 any = true;
                 String what = String.join(" | ", errors.isEmpty() ? "no swallowed errors" : errors,
                         counters.isEmpty() ? "no counters" : counters);
-                out.println(names.teamName(team) + ": " + what);
+                out.println(teamName(team) + ": " + what);
             }
         }
         if (!any) {
@@ -252,6 +257,14 @@ public final class Summary {
             String stopped = "!! the recorder stopped in " + broken.size() + " games";
             out.println(stopped + " (curves and milestones miss their later parts): " + broken);
         }
+    }
+
+    /**
+     * The name of a harness game's team by its number, as {@link Game#teamName} gives it from a game file (team A is
+     * team 0 in every harness game), without needing one.
+     */
+    private static @NonNull String teamName(int team) {
+        return team < 26 ? String.valueOf((char) ('A' + team)) : "T" + team;
     }
 
     /** The rows that {@code keep} accepts. */

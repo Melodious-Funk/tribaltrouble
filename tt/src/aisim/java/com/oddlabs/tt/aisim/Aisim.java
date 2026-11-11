@@ -74,9 +74,11 @@ public final class Aisim {
               play    [--players "P.. vs P.."] [--seed N|random] [--side S] [--name NAME] [--profile] [MAP] [GAME]
                                                  one game with AI logs on -> aisim/runs/NAME/
               batch   --players "P.. vs P.." [--seeds LIST] [--side S] [--logs [lost]] [--name NAME] [--profile]
+                      [--record-every N]
                       [WORKERS] [MAP] [GAME]     every map, A from every start -> aisim/runs/NAME/; --logs keeps the
                                                  AI logs of every game (lost: of the games team A did not win);
-                                                 --profile records where the CPU goes, for profile
+                                                 --profile records where the CPU goes, for profile;
+                                                 --record-every N writes the game file of every Nth game only
               summary RUN                        results of a (running) run
               compare BASE VARIANT [VARIANT...] [--force]
                                                  paired comparison over the same games; several variants: one table
@@ -127,6 +129,8 @@ public final class Aisim {
      */
     private static final int DEFAULT_MINUTES = 360;
     private static final int MAX_MINUTES = 600;
+    /** The most games batch --record-every may leave between two recorded ones. */
+    private static final int MAX_RECORD_EVERY = 1_000_000;
     private static final int MAX_RUN_NAME = 40;
     /** The time part of a default run name. */
     private static final DateTimeFormatter RUN_TIME = DateTimeFormatter.ofPattern("MMdd-HHmmss");
@@ -258,14 +262,17 @@ public final class Aisim {
         return status;
     }
 
-    /** batch --players "P.. vs P.." [--seeds LIST] [--side S] [--name NAME] [--profile] [WORKERS] [MAP] [GAME] */
+    /**
+     * batch --players "P.. vs P.." [--seeds LIST] [--side S] [--name NAME] [--profile] [--record-every N] [WORKERS]
+     * [MAP] [GAME]
+     */
     private static int batch(@NonNull Options options) throws IOException {
         if (options.get("players") == null) {
             throw new UsageException("batch needs its players, such as --players \"myai vs hard\"");
         }
         Lineup lineup = lineup(options, "hard vs hard");
-        options.check(union(GAME_OPTIONS, "seeds", "side", "workers", "cpus", "memory", "logs", "name", "profile"),
-                0);
+        options.check(union(GAME_OPTIONS, "seeds", "side", "workers", "cpus", "memory", "logs", "name", "profile",
+                "record-every"), 0);
         Snapshot.requireFresh(options.flag("stale-ok"));
         String name = runName(options, "", lineup);
         Pace.Limits workers = Pace.Limits.parse(options.get("workers"), options.get("cpus"), options.get("memory"));
@@ -357,15 +364,18 @@ public final class Aisim {
                     Job.SPEEDS) + ", not '" + speed_option + "'");
         }
         String speed = speed_option.equals("normal") ? null : speed_option;
+        int record_every = options.integer("record-every", 1, 1, MAX_RECORD_EVERY);
         List<Job> jobs = new ArrayList<>();
         for (Job.MapCode map : maps.maps()) {
             for (int side : sides) {
                 String key = "s" + map.seed() + "-" + side;
                 String files = Aisim.slash(Runs.RUNS.resolve(run).resolve("g").resolve(key));
+                // null for a recorded game, as every job was before the option
+                Boolean record = jobs.size() % record_every == 0 ? null : Boolean.FALSE;
                 jobs.add(new Job(run, key, map.seed(), side, lineup.text(), lineup.seats(side), map.size(),
                         map.terrain(), map.hills(), map.trees(), map.supplies(), minutes, rng, collapse,
                         stop_when_a_out,
-                        files + ".jsonl", logs != null ? files : null, speed));
+                        files + ".jsonl", logs != null ? files : null, speed, record));
             }
         }
         noteCrowding(lineup, maps);

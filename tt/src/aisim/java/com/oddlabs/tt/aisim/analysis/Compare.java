@@ -87,9 +87,13 @@ public final class Compare {
         }
         printPairedMetrics(base_counted, variant_counted, keys);
         printCpu(base_meta, variant_meta, base_counted, variant_counted, keys);
-        System.out.println("team A's curves over the paired games (base / variant):");
         Curves.Series base_series = new Curves.Series(base, gamesOf(base, keys), Curves.A_TEAM);
         Curves.Series variant_series = new Curves.Series(variant, gamesOf(variant, keys), Curves.A_TEAM);
+        if (base_series.games().isEmpty() || variant_series.games().isEmpty()) {
+            System.out.println("no curves: a run recorded none of the paired games (--record-every)");
+            return 0;
+        }
+        System.out.println("team A's curves over the paired games (base / variant):");
         Curves.table(List.of(base_series, variant_series), Curves.FIELDS, Curves.MINUTES).forEach(System.out::println);
         return 0;
     }

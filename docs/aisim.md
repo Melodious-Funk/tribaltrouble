@@ -548,7 +548,7 @@ The same list as `./aisim.sh help`:
 ./aisim.sh lint    [NAME|CLASS|@TAG...]
 ./aisim.sh play    [--players "P.. vs P.."] [--seed N|random] [--side S] [--name NAME] [--profile] [MAP] [GAME]
 ./aisim.sh batch   --players "P.. vs P.." [--seeds LIST] [--side S] [--logs [lost]] [--name NAME] [--profile]
-                   [WORKERS] [MAP] [GAME]
+                   [--record-every N] [WORKERS] [MAP] [GAME]
 ./aisim.sh summary RUN
 ./aisim.sh compare BASE VARIANT [VARIANT...] [--force]
 ./aisim.sh show    RUN KEY | FILE.jsonl
@@ -591,6 +591,13 @@ GAME: --minutes M (the time limit in game minutes; a game that reaches it is a d
   plays only the games where the first player starts in slot S.
 - **`--logs`** (batch) keeps every game's AI logs, `--logs lost` those of the games team A did not win (the others'
   are deleted as their rows come in); `play` always keeps them ([AI logs](#why-did-it-lose-show-and-replay)).
+- **`--record-every N`** (batch, 1..1000000, default 1) writes the game file of every Nth game of the run only, the
+  first one included, and plays the others without the recorder, which saves about 5% of a game's CPU and the disk of
+  its file: for runs of many games that are read by their result rows, such as the games an AI learns from. Every
+  game still gets its full result row, with `recorded: false` and no `stunned` or `lostInside` counts for an
+  unrecorded one (only the recorder counts those). `summary`, `curves`, `fights` and `export` read the recorded games
+  only, and say so; `compare` pairs every game by its row. `show` needs a recorded game. `replay` works for every
+  game: it records the replay, and verifies an unrecorded game by its final checksum.
 - **`--stop-when-a-out`** ends a game as soon as team A is out ([Players](#players)).
 - **`--speed`** (default `normal`) is the world's game speed, as in the skirmish menu. The world ticks 50 times a
   real second at every speed; the speed sets how much game time a tick covers (half the normal tick's 0.02 s at slow,
@@ -681,12 +688,13 @@ count), `cpus` and `memoryMb` (null when not given); `profile` whether the worke
 A written as `A` (like `A*2 vs normal*2`) and `config` the map options and game settings (compare checks both), `logs`
 which games keep AI logs (`all`, `lost` or null), and `aPools` and `pools` the jar hashes of the frozen AIs on team A
 and on the other teams (compare checks `pools`). Each job has `run key seed side players seats size terrain hills trees
-supplies minutes rng collapse stopWhenAOut game logs speed`, where `seats` is each slot's `spec race team`, `size` and
-`terrain` index `small medium large huge` and `tropical northern`, and `speed` is null at normal speed.
+supplies minutes rng collapse stopWhenAOut game logs speed record`, where `seats` is each slot's `spec race team`, `size` and
+`terrain` index `small medium large huge` and `tropical northern`, `speed` is null at normal speed, and `record` is
+false for a game `--record-every` plays without the recorder and null otherwise.
 
 **Result row** (`results.jsonl`): `v run key seed side slots players a map mapcode minutes rng speed collapse snap perturb
-end via winnerTeam t ticks checksum result place score elim kd30 w15 margin teams recorderFailed problem replay wall
-cpu`.
+end via winnerTeam t ticks checksum result place score elim kd30 w15 margin teams recorderFailed recorded problem
+replay wall cpu`.
 
 - `side` is the first player's slot, `slots` the number of players, `map` the settings in short (`large tropical h2 t10
   s10`).
@@ -702,6 +710,8 @@ cpu`.
 - `t` is the game length in game seconds, `wall` the wall-clock time and `cpu` the simulation thread's CPU time
   (unlike `wall`, not slowed by other load), all in seconds. `minutes`, `out`, `kd30` and `w15` count game time
   too.
+- `recorded` is there, and false, only for a game `--record-every` played without the recorder: it has no game file,
+  and its `stunned` and `lostInside` are 0.
 - `ticks`, the world ticks played, is there only at a speed other than normal, where `t` is not ticks / 50. Rows of
   such runs from before the harness counted game time have a `speed` but no `ticks`: their `t`, `out` and
   `minutes` count world ticks / 50 (a quarter of the game time at ludicrous). The analysis commands convert their

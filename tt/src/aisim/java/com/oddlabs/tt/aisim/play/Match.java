@@ -494,6 +494,9 @@ final class Match {
     /** Creates the game file's folder and starts recording {@code world} into it, one label per slot. */
     private static @NonNull GameRecorder startRecorder(@NonNull Job job, @NonNull String snapshot,
             @NonNull World world) throws IOException {
+        if (!job.recorded()) {
+            return GameRecorder.unrecorded(world);
+        }
         Path game_file = Path.of(job.game());
         Files.createDirectories(game_file.getParent());
         String[] labels = new String[job.slots()];
@@ -598,6 +601,9 @@ final class Match {
         }
         row.put("teams", blocks);
         row.put("recorderFailed", recorder.hasFailed());
+        if (!job.recorded()) {
+            row.put("recorded", false);
+        }
         row.put("problem", outcome.problem);
         row.put("replay", replayCommand(job));
         return row;
