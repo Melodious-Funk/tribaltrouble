@@ -42,6 +42,7 @@ import com.oddlabs.tt.viewer.AmbientAudio;
 import com.oddlabs.tt.viewer.Cheat;
 import com.oddlabs.tt.viewer.Selection;
 import com.oddlabs.tt.viewer.SpectatorView;
+import com.oddlabs.tt.viewer.WatchControls;
 
 public final class DefaultRenderer implements UIRenderer, AutoCloseable {
 
@@ -89,6 +90,8 @@ public final class DefaultRenderer implements UIRenderer, AutoCloseable {
 
     private @Nullable Building selected_building;
     private final @Nullable SpectatorView spectator_view;
+    /** A watched game's controls, which draw their 3D overlay last in the view's pass; null in every other game. */
+    private @Nullable WatchControls watch_overlay;
     private boolean suppressTeamHighlight;
 
     private void setDrawBuffers(boolean mask) {
@@ -152,6 +155,19 @@ public final class DefaultRenderer implements UIRenderer, AutoCloseable {
 
     public boolean isCheater() {
         return cheat != null && cheat.isEnabled();
+    }
+
+    /** Draws every owner's objects as dots on the overview map, enemies too: for a watched game, which has no side. */
+    public void showEveryOwnerOnMap() {
+        element_renderer.getRenderState().showEveryOwnerOnMap();
+    }
+
+    /**
+     * For a watched game: {@code controls} draw their 3D overlay (an AI's painted plans) last in the view's pass, over
+     * the water and the particles, and not in the water's reflection.
+     */
+    public void drawWatchOverlay(@NonNull WatchControls controls) {
+        this.watch_overlay = controls;
     }
 
     public void setSelectedBuilding(@Nullable Building building) {
@@ -363,6 +379,11 @@ public final class DefaultRenderer implements UIRenderer, AutoCloseable {
         // Rally point uses SpriteShader (Mask) -> Enable
         setDrawBuffers(true);
         renderRallyPoint(context, frustum_state);
+
+        WatchControls watch = watch_overlay;
+        if (watch != null && !reflectionPass) {
+            watch.render3D(frustum_state, modelViewStack, projectionStack);
+        }
 
         assert ShaderProgram.activeShader() == null : "Shader still active=" + ShaderProgram.activeShader();
 

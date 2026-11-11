@@ -52,37 +52,37 @@ public record Job(@NonNull String run, @NonNull String key, int seed, int side, 
     public record Seat(@NonNull String spec, @NonNull String race, int team) {
     }
 
-    int slots() {
+    public int slots() {
         return seats.size();
     }
 
     /** The AI spec that plays {@code slot}. */
     @NonNull
-    String spec(int slot) {
+    public String spec(int slot) {
         return seats.get(slot).spec();
     }
 
-    boolean vikings(int slot) {
+    public boolean vikings(int slot) {
         return seats.get(slot).race().equals(VIKINGS);
     }
 
-    int team(int slot) {
+    public int team(int slot) {
         return seats.get(slot).team();
     }
 
     /** Whether {@code slot} plays on team A, the first team. */
-    boolean onTeamA(int slot) {
+    public boolean onTeamA(int slot) {
         return team(slot) == team(side);
     }
 
     /** How many teams play: they are numbered 0.. in the order given, team A (0) first. */
-    int teamCount() {
+    public int teamCount() {
         return seats.stream().mapToInt(Seat::team).max().orElse(0) + 1;
     }
 
     /** Team {@code team}'s part of {@link #players}, such as "normal*2". */
     @NonNull
-    String teamPlayers(int team) {
+    public String teamPlayers(int team) {
         return players.split(" vs ")[team];
     }
 
@@ -90,21 +90,21 @@ public record Job(@NonNull String run, @NonNull String key, int seed, int side, 
      * The world's game speed (Game.GAMESPEED_*): each world tick lasts 0.5, 1, 1.75 or 4 times the normal tick's game
      * time. The harness counts game time ({@code GameTime}), so minutes are game minutes at every speed.
      */
-    int gameSpeed() {
+    public int gameSpeed() {
         return Game.GAMESPEED_SLOW + SPEEDS.indexOf(speed == null ? "normal" : speed);
     }
 
-    int meters() {
+    public int meters() {
         return METERS[size];
     }
 
-    Landscape.@NonNull TerrainType terrainType() {
+    public Landscape.@NonNull TerrainType terrainType() {
         return Landscape.TerrainType.values()[terrain];
     }
 
     /** The map settings in short: "large tropical h2 t10 s10". */
     @NonNull
-    String map() {
+    public String map() {
         return SIZES.get(size) + " " + TERRAINS.get(terrain) + " h" + hills + " t" + trees + " s" + supplies;
     }
 
@@ -130,7 +130,7 @@ public record Job(@NonNull String run, @NonNull String key, int seed, int side, 
 
     /** The code a player types into the skirmish menu's map code box to get this map. */
     @NonNull
-    String mapcode() {
+    public String mapcode() {
         return new MapCode(seed, size, terrain, hills, trees, supplies).encode();
     }
 
