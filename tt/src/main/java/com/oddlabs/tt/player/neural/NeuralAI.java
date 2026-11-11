@@ -9,6 +9,7 @@ import com.oddlabs.tt.player.UnitInfo;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Random;
@@ -18,9 +19,10 @@ import java.util.Random;
  * reads an {@link Observation} and chooses one action per head ({@link Heads}); the skill layer ({@link Body}) carries
  * the choices out with plain rules. lab/neural holds the trainer and the notes.
  *
- * <p>Params: {@code net} the network file (without one the policy chooses at random), {@code traj} a folder that gets
- * this player's trajectory for the trainer, {@code greedy=1} to take the most likely action instead of sampling (for
- * measuring a net's strength), {@code seed} to vary the sampling between runs, and {@code step}.
+ * <p>Params: {@code net} the network file (without one the policy chooses at random), {@code traj} an existing folder
+ * that gets this player's trajectory for the trainer, {@code greedy=1} to take the most likely action instead of
+ * sampling (for measuring a net's strength), {@code seed} to vary the sampling between runs, and {@code step}. A
+ * relative file name is from the repository root, also in the game client, which runs one folder below it.
  */
 public final class NeuralAI extends AI {
     private final @NonNull AiLog log;
@@ -48,10 +50,26 @@ public final class NeuralAI extends AI {
         long mixed = seed * 1_000_003L + slot * 7919L + Float.floatToIntBits(
                 owner.getStartX()) * 31L + Float.floatToIntBits(owner.getStartY());
         random = greedy ? null : new Random(mixed);
-        net = Net.load(net_file.isEmpty() ? null : Path.of(net_file), Observation.SIZE);
-        trajectory = new Trajectory(trajectory_folder.isEmpty() ? null : trajectory_folder, log.game(), slot);
+        net = Net.load(net_file.isEmpty() ? null : located(net_file), Observation.SIZE);
+        trajectory = new Trajectory(trajectory_folder.isEmpty() ? null : located(trajectory_folder), log.game(),
+                slot);
         body = new Body(owner, log);
         Arrays.fill(action, -1);
+    }
+
+    /**
+     * The file or folder {@code name} of the parameters. The harness runs in the repository root, which a relative
+     * name is from; the game client (a watched game, a play-test) runs in tt/, one folder below.
+     */
+    private static @NonNull Path located(@NonNull String name) {
+        Path path = Path.of(name);
+        if (!path.isAbsolute() && !Files.exists(path)) {
+            Path from_client = Path.of("..").resolve(path);
+            if (Files.exists(from_client)) {
+                return from_client;
+            }
+        }
+        return path;
     }
 
     @Override
