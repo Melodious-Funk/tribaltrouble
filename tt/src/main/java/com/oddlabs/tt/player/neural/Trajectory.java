@@ -32,19 +32,20 @@ final class Trajectory {
 
     /**
      * A trajectory under {@code folder} for the game the harness labelled {@code game} ("key=s3-1 snap=..."); it
-     * writes nothing without a folder, without a key, or when the file is already there.
+     * writes nothing without a key, when the file is already there, or when the folder is not: the trainer makes the
+     * folder for the games it plays and removes it afterwards, so a game replayed or watched later writes nothing.
      */
-    Trajectory(@Nullable String folder, @NonNull String game, int slot) {
+    Trajectory(@Nullable Path folder, @NonNull String game, int slot) {
         String key = null;
         for (String word : game.split(" ")) {
             if (word.startsWith("key=")) {
                 key = word.substring("key=".length());
             }
         }
-        Path path = folder == null || key == null ? null : Path.of(folder, key + "-s" + slot + ".traj");
+        Path path = folder == null || key == null || !Files.isDirectory(folder) ? null : folder.resolve(
+                key + "-s" + slot + ".traj");
         if (path != null) {
             try {
-                Files.createDirectories(path.getParent());
                 Files.write(path, header(slot), StandardOpenOption.CREATE_NEW);
             } catch (IOException e) {
                 path = null; // most likely it exists: a replay

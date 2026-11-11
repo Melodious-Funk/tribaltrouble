@@ -161,6 +161,7 @@ class Trainer:
         g = self.generation
         trajectories = self.dir / "traj" / f"g{g:06d}"
         shutil.rmtree(trajectories, ignore_errors=True)
+        trajectories.mkdir(parents=True)  # the AI writes only into a folder that is there
         games = []
         scores = {}
         first_seed = self.random.randrange(TRAIN_SEEDS - 400)
