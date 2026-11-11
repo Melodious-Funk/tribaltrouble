@@ -20,6 +20,7 @@ import math
 import os
 import random
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -379,9 +380,16 @@ def main():
     np.random.seed(args.seed)
     if not math.isfinite(args.lr) or args.lr <= 0:
         sys.exit("--lr must be positive")
+    def interrupt(*_):
+        raise KeyboardInterrupt  # as Ctrl+C: the batch it waits for is ended too
+
+    signal.signal(signal.SIGTERM, interrupt)  # the dashboard's "stop now"
+    sys.stdout.reconfigure(line_buffering=True)  # into a file (the dashboard's train.out), line by line
     trainer = Trainer(args)
     try:
         trainer.run()
+    except KeyboardInterrupt:
+        print(f"stopped in generation {trainer.generation}: it is played again when the run resumes")
     finally:
         trainer.status("stopped")
 

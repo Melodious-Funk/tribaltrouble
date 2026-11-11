@@ -97,7 +97,29 @@
   th { color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface-1); }
   th:first-child, td:first-child { text-align: left; }
   table.plain th, table.plain td { text-align: left; }
-  .watch p { margin: 4px 0; }
+  button.primary { background: var(--series-1); border-color: transparent; color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  input { font: inherit; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; width: 9.5em; }
+  input[name="run"] { width: 13em; }
+  input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--series-1);
+    outline-offset: 1px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; margin-top: 8px; }
+  .row label, .more label { display: flex; flex-direction: column; gap: 2px; color: var(--text-secondary);
+    font-size: 12.5px; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; color: var(--text-secondary); }
+  .more { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 16px; margin-top: 8px; }
+  .more input { width: 100%; }
+  .message { margin-top: 8px; min-height: 1.4em; color: var(--text-secondary); overflow-wrap: anywhere;
+    white-space: pre-wrap; }
+  .message.bad { color: var(--delta-bad); }
+  #control, #watch { margin-top: 12px; }
+  #watch td button, #watch th button { padding: 1px 8px; font-size: 12.5px; }
+  #watch tr.games > td { padding: 6px 0 10px 18px; background: var(--page); }
+  #watch td.actions { text-align: right; white-space: nowrap; }
+  #watch table.plain td:not(:first-child):not(.text), #watch table.plain th:not(:first-child):not(.text) {
+    text-align: right; }
   .muted { color: var(--text-muted); }
 </style>
 </head>
@@ -115,8 +137,41 @@
     <span class="muted" id="updated"></span>
   </div>
   <section class="card" id="status"></section>
+  <section class="card" id="control">
+    <div class="title">Start or stop training</div>
+    <div id="running-controls" hidden>
+      <div class="note" id="running-text"></div>
+      <div class="row">
+        <button type="button" id="stop-after">Stop after this generation</button>
+        <button type="button" id="stop-cancel" hidden>Let it go on after all</button>
+        <button type="button" id="stop-now">Stop now</button>
+      </div>
+    </div>
+    <form id="start-form" hidden>
+      <div class="note">A name that has a run goes on with that run from its last generation; a new name starts
+        a net of random weights. One run trains at a time: it takes every core.</div>
+      <div class="row">
+        <label>Run <input name="run" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,59}" list="run-names"
+          autocomplete="off"></label>
+        <label>Generations to train <input name="generations" type="number" min="1" value="200"></label>
+        <label>Games per generation <input name="games" type="number" min="2" step="2" value="120"></label>
+        <button type="submit" class="primary" id="start-button">Start training</button>
+      </div>
+      <datalist id="run-names"></datalist>
+      <details>
+        <summary>More settings (empty: train.py's own default, shown in grey)</summary>
+        <div class="more" id="more-settings"></div>
+      </details>
+    </form>
+    <div class="message" id="control-message" role="status"></div>
+  </section>
   <div class="tiles" id="tiles"></div>
   <div id="sections"></div>
+  <h2>Watch its games</h2>
+  <p class="lede">Opens a recorded game in the viewer (<code>./aisim.sh watch</code>): a game window on this
+    desktop, a few seconds after the click. It plays from the last build, so build before watching if the Java code
+    changed. In the viewer, G lists the same games.</p>
+  <section class="card" id="watch"></section>
 </main>
 <script>
 "use strict";
@@ -135,9 +190,27 @@ const STOCK = ["easy", "normal", "hard"];
 // colour follows the opponent in every chart
 const OPPONENT_COLOR = {easy: "var(--series-1)", normal: "var(--series-2)", hard: "var(--series-3)",
   "earlier nets": "var(--series-4)", "self-play": "var(--series-5)"};
+// What the page sends back to start or stop anything: the server gives it only to its own page.
+const TOKEN = "__DASHBOARD_TOKEN__";
+// train.py's other settings: [option, label, its default there]
+const MORE_SETTINGS = [
+  ["minutes", "Time limit of a game, game minutes", "30"], ["lr", "Learning rate", "0.0003"],
+  ["epochs", "Passes over a generation's decisions", "4"], ["minibatch", "Decisions per update", "1024"],
+  ["entropy", "Entropy bonus", "0.01"], ["shaping", "Weight of the shaped reward", "0.5"],
+  ["self_share", "Share of games against itself", "0.4"], ["stock_share", "Share against the stock AIs", "0.2"],
+  ["eval_generations", "Measure strength every N generations", "10"], ["eval_games", "Games per stock AI when measuring", "20"],
+  ["record_generations", "Keep the games of every Nth generation", "100"],
+  ["snapshot_generations", "A net joins the league every N generations", "10"],
+  ["hidden", "Hidden layers (a new run only)", "128,128"], ["workers", "Harness workers", "auto"],
+  ["gamma", "Discount per decision", "0.997"], ["gae_lambda", "GAE lambda", "0.95"], ["clip", "PPO clip", "0.2"],
+  ["seed", "Seed", "1"],
+];
+// what the form starts with where the selected run has no settings of its own: what the first trials learned with
+const START_WITH = {lr: "0.001", epochs: "6", minibatch: "512"};
 const SVG = "http://www.w3.org/2000/svg";
 const view = {run: null, log: [], status: null, args: null, kept: [], nets: 0, root: "", range: 0, smooth: 1,
-  tables: new Set(), drawn: ""};
+  tables: new Set(), drawn: "", training: null, training_stop: false, filled: undefined,
+  recordings: [], every: false, open: null, games: [], listed: ""};
 
 function el(tag, attributes, ...children) {
   const node = tag === "svg" || el.svg ? document.createElementNS(SVG, tag) : document.createElement(tag);
@@ -502,18 +575,14 @@ function renderStatus() {
       more.append(`, about ${duration(each)} a generation; done around ${clock(status.now + left)} (${duration(left)}).`);
     } else more.append(".");
     detail.append(more);
-    if (status.stop_requested) detail.append(el("div", {text: "A STOP file is there: it stops after this generation."}));
-    else detail.append(el("div", {}, "To stop it after the generation it is in: create ",
-      el("code", {text: `aisim/neural/${view.run}/STOP`}), "."));
+    if (status.stop_requested) detail.append(el("div", {text: "It stops when this generation is done."}));
     box.append(el("div", {}, el("div", {class: "what", text: "Training now"}), detail));
   } else {
     box.append(el("div", {class: "icon", text: "■"}));
     const when = last && last.time ? `Its last generation (${last.generation}) ended ${duration(status.now - last.time)} ago.`
       : last ? `Its last generation is ${last.generation}.` : "It has no finished generation yet.";
-    detail.append(when + " To go on from there, from the repository root: ",
+    detail.append(when + " Go on with it below, or from the repository root: ",
       el("code", {text: `aisim/venv/bin/python lab/neural/train.py --run ${view.run} --generations 200`}));
-    if (status.stop_requested) detail.append(el("div", {}, "Remove ",
-      el("code", {text: `aisim/neural/${view.run}/STOP`}), " first, or it stops at once."));
     box.append(el("div", {}, el("div", {class: "what", text: "Not training"}), detail));
   }
 }
@@ -690,18 +759,181 @@ function renderCharts() {
     }
     settings.append(el("div", {class: "tablewrap"}, table));
   } else settings.append(el("div", {class: "empty", text: not_logged}));
-  const watch = el("figure", {class: "card watch"}, el("div", {class: "title", text: "Games to watch"}),
-    el("div", {class: "note", text: "The generations whose games were kept (--record-generations). In the "
-      + "viewer, G lists them all."}));
-  if (view.kept.length > 0) {
-    for (const entry of view.kept) {
-      watch.append(el("p", {}, el("code", {text: `./aisim.sh watch ${entry.name}`}),
-        el("span", {class: "muted", text: `  ${entry.games} games`})));
-    }
-  } else watch.append(el("div", {class: "empty", text: "No kept games of this run in aisim/runs."}));
-  section(parent, "The league, the settings and the games", null, "wide", [league, settings, watch]);
+  section(parent, "The league and the settings", null, "wide", [league, settings]);
 
   for (const c of cards) c.fill();
+}
+
+/** Asks the server to do something; the answer is {ok: text} or {error: text}. */
+async function post(path, body) {
+  try {
+    const answer = await fetch(path, {method: "POST", body: JSON.stringify(body),
+      headers: {"Content-Type": "application/json", "X-Dashboard-Token": TOKEN}});
+    const text = await answer.text();
+    try { return JSON.parse(text); } catch (e) { return {error: answer.status + " " + answer.statusText}; }
+  } catch (e) {
+    return {error: "the dashboard's server does not answer: is dashboard.py still running?"};
+  }
+}
+function say(id, answer) {
+  const box = document.getElementById(id);
+  box.textContent = answer.ok || answer.error || "";
+  box.className = answer.error ? "message bad" : "message";
+}
+
+// ---------------------------------------------------------------- starting and stopping
+
+const form = document.getElementById("start-form");
+for (const [name, label, usual] of MORE_SETTINGS) {
+  document.getElementById("more-settings").append(el("label", {}, label,
+    el("input", {name, placeholder: usual, autocomplete: "off"})));
+}
+/** The form as the selected run was last started (or as a first run is best started). */
+function fillForm() {
+  const args = view.args || {};
+  form.elements.run.value = view.run || "first";
+  for (const input of form.querySelectorAll("input")) {
+    if (input.name === "run") continue;
+    const value = args[input.name] ?? START_WITH[input.name];
+    if (value != null) input.value = value;
+    else if (input.closest("#more-settings")) input.value = "";
+  }
+}
+function updateControl(names) {
+  const running = document.getElementById("running-controls");
+  running.hidden = !view.training;
+  form.hidden = !!view.training;
+  if (view.training) {
+    document.getElementById("running-text").textContent = view.training_stop
+      ? `${view.training} is training, and stops when its generation is done.`
+      : `${view.training} is training. Stopping after the generation loses nothing; stopping now loses the `
+        + "generation it is in.";
+    document.getElementById("stop-after").hidden = view.training_stop;
+    document.getElementById("stop-cancel").hidden = !view.training_stop;
+  }
+  const list = document.getElementById("run-names");
+  if ([...list.options].map(option => option.value).join() !== names.join()) {
+    list.replaceChildren(...names.map(name => el("option", {value: name})));
+  }
+  const resumes = names.includes(form.elements.run.value);
+  document.getElementById("start-button").textContent = resumes ? "Go on training" : "Start training";
+}
+form.elements.run.addEventListener("input", () => updateControl([...document.getElementById("run-names").options]
+  .map(option => option.value)));
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  const settings = {};
+  for (const input of form.querySelectorAll("input")) {
+    if (input.name !== "run" && input.value.trim() !== "") settings[input.name] = input.value.trim();
+  }
+  const run = form.elements.run.value.trim();
+  document.getElementById("start-button").disabled = true;
+  const answer = await post("/api/start", {run, settings});
+  document.getElementById("start-button").disabled = false;
+  say("control-message", answer);
+  if (answer.ok) {
+    view.run = run;
+    history.replaceState(null, "", "?run=" + encodeURIComponent(run));
+    await poll(true);
+  }
+});
+async function stop(how) {
+  if (how === "now" && !confirm(`Stop ${view.training} now? The generation it is in is lost.`)) return;
+  say("control-message", await post("/api/stop", {run: view.training, how}));
+  await poll(false);
+}
+document.getElementById("stop-after").addEventListener("click", () => stop("after"));
+document.getElementById("stop-cancel").addEventListener("click", () => stop("cancel"));
+document.getElementById("stop-now").addEventListener("click", () => stop("now"));
+
+// ---------------------------------------------------------------- the games to watch
+
+async function loadRecordings() {
+  const query = new URLSearchParams({all: view.every ? "1" : "0"});
+  if (view.run) query.set("training", view.run);
+  try {
+    view.recordings = await (await fetch("/api/recordings?" + query)).json();
+  } catch (e) {
+    view.recordings = [];
+  }
+  if (!view.recordings.some(entry => entry.name === view.open)) { view.open = null; view.games = []; }
+  renderWatch();
+}
+async function openGames(run) {
+  if (view.open === run) { view.open = null; view.games = []; renderWatch(); return; }
+  try {
+    const games = await (await fetch("/api/games?run=" + encodeURIComponent(run))).json();
+    view.open = run;
+    view.games = Array.isArray(games) ? games : [];
+  } catch (e) {
+    view.open = null;
+  }
+  renderWatch();
+}
+async function watchGame(button, run, key) {
+  button.disabled = true;
+  say("watch-message", {ok: "starting the viewer..."});
+  say("watch-message", await post("/api/watch", key ? {run, key} : {run}));
+  button.disabled = false;
+}
+function gameClock(seconds) {
+  const s = Math.round(seconds), two = n => String(n).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`
+    : `${Math.floor(s / 60)}:${two(s % 60)}`;
+}
+function renderWatch() {
+  const box = document.getElementById("watch");
+  const said = document.getElementById("watch-message");
+  const every = el("input", {type: "checkbox", id: "every"});
+  every.checked = view.every;
+  every.style.width = "auto";
+  every.addEventListener("change", () => { view.every = every.checked; loadRecordings(); });
+  const refresh = el("button", {type: "button", text: "Read again"});
+  refresh.addEventListener("click", loadRecordings);
+  const head = el("div", {class: "filters"}, el("label", {}, every,
+    "every run in aisim/runs, not only the kept generations of " + (view.run || "the selected training run")), refresh);
+  head.style.margin = "0 0 6px";
+  const message = el("div", {class: said ? said.className : "message", id: "watch-message", role: "status",
+    text: said ? said.textContent : ""});
+  box.replaceChildren(head);
+  if (view.recordings.length === 0) {
+    box.append(el("div", {class: "empty", text: view.every ? "No runs with results in aisim/runs."
+      : "No kept games of this training run: the trainer keeps the games of every --record-generations'th "
+        + "generation (the first is generation 0). Tick the box for every run there is."}), message);
+    return;
+  }
+  const table = el("table", {class: "plain"});
+  table.append(el("tr", {}, el("th", {text: "run"}), el("th", {class: "text", text: "players"}),
+    el("th", {text: "games"}), el("th", {text: "A won"}), el("th", {text: "lost"}), el("th", {text: "drew"}),
+    el("th", {text: "at the time limit"}), el("th", {})));
+  for (const entry of view.recordings) {
+    const watch = el("button", {type: "button", class: "primary", text: "Watch"});
+    watch.addEventListener("click", () => watchGame(watch, entry.name, null));
+    const list = el("button", {type: "button", text: view.open === entry.name ? "Hide its games" : "Its games"});
+    list.addEventListener("click", () => openGames(entry.name));
+    table.append(el("tr", {}, el("td", {text: entry.name}), el("td", {class: "text", text: shortLineup(entry.players)}),
+      el("td", {text: number(entry.games, 0)}), el("td", {text: number(entry.wins, 0)}),
+      el("td", {text: number(entry.losses, 0)}), el("td", {text: number(entry.draws, 0)}),
+      el("td", {text: number(entry.timeouts, 0)}), el("td", {class: "actions"}, list, " ", watch)));
+    if (view.open !== entry.name) continue;
+    const games = el("table", {class: "plain"});
+    games.append(el("tr", {}, el("th", {text: "game"}), el("th", {class: "text", text: "team A"}),
+      el("th", {class: "text", text: "ended"}), el("th", {text: "length"}), el("th", {text: "units at the end"}),
+      el("th", {text: "kills"}), el("th", {})));
+    for (const game of view.games) {
+      const one = el("button", {type: "button", text: "Watch"});
+      one.addEventListener("click", () => watchGame(one, entry.name, game.key));
+      const ended = {timeout: "at the time limit", elim: "eliminated"}[game.end] || game.end;
+      games.append(el("tr", {}, el("td", {text: game.key}), el("td", {class: "text", text: game.result}),
+        el("td", {class: "text", text: ended + (game.file ? "" : " (no game file: plays unverified)")}),
+        el("td", {text: gameClock(game.seconds)}), el("td", {text: game.units}), el("td", {text: game.kills}),
+        el("td", {class: "actions"}, one)));
+    }
+    const cell = el("td", {colspan: "8"}, el("div", {class: "tablewrap"}, games));
+    table.append(el("tr", {class: "games"}, cell));
+  }
+  box.append(el("div", {class: "tablewrap"}, table), message);
+  box.querySelector(".tablewrap").style.maxHeight = "none";
 }
 
 async function poll(reset) {
@@ -724,6 +956,8 @@ async function poll(reset) {
   view.kept = data.kept || [];
   view.nets = data.nets || 0;
   view.root = data.root;
+  view.training = data.training;
+  view.training_stop = data.training_stop;
   const select = document.getElementById("run");
   const names = data.runs.map(run => run.name);
   if ([...select.options].map(option => option.value).join() !== names.join()) {
@@ -732,6 +966,12 @@ async function poll(reset) {
   if (view.run) select.value = view.run;
   document.getElementById("updated").textContent = "read " + new Date().toLocaleTimeString();
   renderStatus();
+  // the form follows the selected run, and is then the user's to edit
+  if (view.filled !== view.run) { view.filled = view.run; fillForm(); }
+  updateControl(names);
+  // the games to watch are read again when the selected run or its kept generations change
+  const listed = [view.run, view.kept.length, view.kept.reduce((sum, entry) => sum + entry.games, 0)].join();
+  if (listed !== view.listed) { view.listed = listed; loadRecordings(); }
   // the charts are drawn again only when their data changed: a hover survives the polls in between
   const drawn = [view.run, view.log.length, view.range, view.smooth, view.kept.length, innerWidth].join();
   if (drawn !== view.drawn) {
