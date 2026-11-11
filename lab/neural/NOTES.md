@@ -70,6 +70,32 @@ aisim/venv/bin/python lab/neural/train.py --run first --generations 200 --games 
 `bash aisim.sh`, so on Windows start it from Git Bash. While it runs, do not edit `.java` files without rebuilding:
 every batch refuses a stale build.
 
+## Watching recorded games (branch `neural-watch`)
+
+`neural-watch` is `neural` with jlamb's `viewer` branch merged in (`origin/viewer`, 44 commits on an older
+`headless`; two conflicts and a renamed renderer parameter) and a list of the recorded games added to it:
+
+```bash
+git switch neural-watch && ./aisim.sh build
+./aisim.sh watch --filter timeout          # the newest game that ended at the time limit, the list of games open
+./aisim.sh watch trial2-g000000-self s8805-0
+```
+
+`watch` plays the game again in the game client, tick for tick, checked against the recording every 30 game seconds
+(`VERIFIED to ...`), with pause, speeds up to MAX, jumps and rewind, an inspector for any unit or building and each
+AI's log. G lists the runs of `aisim/runs` (or `--folder DIR`) and a run's games, F filters them (all, at the time
+limit, won or lost); a click on a game starts the viewer again on it. The manual is `docs/aisim.md`, Watching a game.
+It needs a desktop session with OpenGL 4.1 and takes a 6 GB heap.
+
+- The trainer keeps a generation's run folders only every `--record-generations` (100), so those are the training
+  games there are to watch; an evaluation or any `batch` of your own is listed too.
+- A net must still be where the run's lineup names it (`aisim/neural/RUN/nets/gNNNNNN.bin`, kept for every
+  generation). A game recorded before the AI's code changed needs `--ai-from-run`, and its snapshot in `aisim/snap`.
+- The viewer's clock shows times at ludicrous speed by default: a 30-minute game reads 2:00:00 until T picks normal.
+- What the first time-limit draws show (`trial2-g000000-self`, a net of random weights against itself): both sides
+  reach 250 units and neither kills a unit in 29 of 30 games. Against easy 18 of 30 games reach the limit and the
+  net loses the other 12.
+
 ## Measured (this laptop, Ryzen 5 4500U, 6 cores, no GPU)
 
 - Target setting, hard vs hard: 0.55 s CPU median per game once a worker is warm; the first three games of a worker
