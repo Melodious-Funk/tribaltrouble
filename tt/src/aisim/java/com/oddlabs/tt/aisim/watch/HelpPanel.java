@@ -69,6 +69,8 @@ final class HelpPanel extends HudPanel {
             S | status panel and jump box: show / hide | (J still jumps; messages show at the top)
             R | timeline: show / hide | (with the compass off, the AI log takes its room)
             A  Shift+A | the followed AI's overlay: all layers, none, each layer alone
+            G | recorded games: | the folder's runs and a run's games; click one to watch it (Esc closes it too)
+            F  Backspace | in that list: | the next filter of the games (all, at the time limit, won or lost) / all runs
             F1  H | this help | (Esc closes it too)
             Ctrl+H | hide / show the whole HUD
             Esc | menu: Resume, Options, Quit | (Quit quits the program; the game pauses meanwhile)
@@ -76,7 +78,7 @@ final class HelpPanel extends HudPanel {
             * left click | inspect a unit or building of any player | (and ring it)
             * scoreboard row | follow that player | (camera and AI log)
             * timeline | click or drag, let go to jump there; hover a mark to read its event
-            * wheel | zoom; over the AI log: older lines | (it zooms three times as far out as in a game)
+            * wheel | zoom; over the AI log: older lines; over the list of games: its rows | (zooms three times as far out as in a game)
             """;
     private static final List<Row> ROWS = TABLE.lines().map(HelpPanel::row).toList();
     private static final String TITLE = "Watching a recorded game: the keys and the mouse";

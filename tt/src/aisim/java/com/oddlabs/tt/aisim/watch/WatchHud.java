@@ -104,7 +104,7 @@ final class WatchHud implements WatchControls {
     static final int HINT_GAP = 12;
     private static final Vector4fc SEEKING = Color.argb4v(0xFF_80_C8_FF);
     private static final List<String> HINTS = List.of("F1 help", "P pause", "+/- speed", ", . step", "J jump",
-            "N B events", "[ ] players", "C camera", "T clock");
+            "N B events", "[ ] players", "C camera", "T clock", "G games");
     /** The key hint in one line, and in two for a status panel too narrow for one (after the 5th key). */
     private static final TextPanel.Line KEY_HINT = keyHint(HINTS);
     private static final List<TextPanel.Line> KEY_HINT_ROWS = List.of(keyHint(HINTS.subList(0, 5)), keyHint(
@@ -121,6 +121,7 @@ final class WatchHud implements WatchControls {
     private final @NonNull Timeline timeline;
     private final @NonNull AiLogPanel ai_log;
     private final @NonNull HelpPanel help = new HelpPanel();
+    private final @NonNull GamesPanel games;
     /**
      * Panels about the followed AI, stacked above its log at the bottom right, the first lowest (an AI's own status
      * panel, from its AiView, belongs here).
@@ -166,6 +167,7 @@ final class WatchHud implements WatchControls {
         this.scoreboard = new Scoreboard(game);
         this.timeline = new Timeline(game);
         this.ai_log = new AiLogPanel(game);
+        this.games = new GamesPanel(game);
         // added first is drawn lowest: the help over everything
         layer.addChild(timeline);
         layer.addChild(ai_log);
@@ -174,6 +176,9 @@ final class WatchHud implements WatchControls {
         layer.addChild(note);
         layer.addChild(status);
         addAiColumnPanel(game.aiOverlay().panel());
+        if (game.file().browse()) {
+            layer.addChild(games);
+        }
         jump_box.addEnterListener(this::jump);
     }
 
@@ -315,6 +320,7 @@ final class WatchHud implements WatchControls {
         // the help in the middle, but under the jump box, which the delegate draws over the HUD, where there is room
         int help_top = Math.min((height + help.getHeight()) / 2, jump_box.getY() - GAP);
         help.setPos((width - help.getWidth()) / 2, Math.max(MARGIN, help_top - help.getHeight()));
+        games.place(width, height, jump_box.getY() - GAP);
 
         // the bottom: the timeline, all along but for the compass's corner
         boolean compass = Settings.getSettings().show_compass;
@@ -586,6 +592,11 @@ final class WatchHud implements WatchControls {
     // ---------------------------------------------------------------- what the selftest and the session ask
 
     @NonNull
+    GamesPanel games() {
+        return games;
+    }
+
+    @NonNull
     Scoreboard scoreboard() {
         return scoreboard;
     }
@@ -626,6 +637,7 @@ final class WatchHud implements WatchControls {
         addBounds(bounds, "log", ai_log, ai_log.isShown());
         addBounds(bounds, "timeline", timeline, timeline.isShown());
         addBounds(bounds, "help", help, help.isShown());
+        addBounds(bounds, "games", games, games.isShown());
         return bounds;
     }
 
@@ -639,10 +651,11 @@ final class WatchHud implements WatchControls {
         }
     }
 
-    /** Whether panel {@code name} (help, log, scoreboard, inspector, status, timeline) is shown. */
+    /** Whether panel {@code name} (help, games, log, scoreboard, inspector, status, timeline) is shown. */
     boolean isShown(@NonNull String name) {
         return switch (name) {
             case "help" -> help.isShown();
+            case "games" -> games.isShown();
             case "log" -> ai_log.isShown();
             case "scoreboard" -> scoreboard.isShown();
             case "inspector" -> inspector.isShown();
@@ -693,6 +706,9 @@ final class WatchHud implements WatchControls {
         } else if (help.isShown() && event.hasAction(GameAction.GLOBAL_MENU)) {
             toggle(help); // Esc closes the help before it opens the menu
             event.consume();
+        } else if (games.isShown() && event.hasAction(GameAction.GLOBAL_MENU)) {
+            toggle(games); // and the list of games
+            event.consume();
         } else if (key == Key.A) {
             game.aiOverlay().cycle(event.isShiftDown() ? -1 : 1); // all, none, each layer alone
             event.consume();
@@ -742,6 +758,19 @@ final class WatchHud implements WatchControls {
             }
             case R -> toggle(timeline);
             case H, F1 -> toggle(help);
+            case G -> toggle(games);
+            case F -> {
+                if (!games.isShown()) {
+                    return false;
+                }
+                games.cycleFilter();
+            }
+            case BACK -> {
+                if (!games.isShown()) {
+                    return false;
+                }
+                games.back();
+            }
             default -> {
                 return false;
             }

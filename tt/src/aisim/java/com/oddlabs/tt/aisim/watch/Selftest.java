@@ -572,7 +572,10 @@ final class Selftest {
         }
     }
 
-    /** A place on the screen in GUI units (y up): {@code X,Y}, {@code row:SLOT}, {@code timeline:TIME}, ... */
+    /**
+     * A place on the screen in GUI units (y up): {@code X,Y}, {@code row:SLOT}, {@code game:ROW},
+     * {@code timeline:TIME}, ...
+     */
     private int @NonNull [] guiPoint(@NonNull String where) {
         WatchHud hud = game.hud();
         String[] parts = where.trim().split(":", 2);
@@ -594,6 +597,12 @@ final class Selftest {
                 int tick = game.times().parse(argument, game.clock().tick(), game.endTick());
                 return new int[]{timeline.guiX() + timeline.xOf(tick), timeline.guiY() + timeline.barMiddleY()};
             }
+            case "game" -> {
+                GamesPanel games = hud.games();
+                requireShown(games, "the list of games");
+                return new int[]{games.guiX() + games.getWidth() / 3, games.guiY() + games.rowMiddleY(
+                        Integer.parseInt(argument))};
+            }
             case "log" -> {
                 AiLogPanel log = hud.aiLog();
                 requireShown(log, "the AI log");
@@ -607,7 +616,7 @@ final class Selftest {
                 String[] xy = where.split(",");
                 if (xy.length != 2) {
                     throw new IllegalArgumentException(
-                            "not a place: " + where + " (X,Y row:SLOT timeline:TIME log view)");
+                            "not a place: " + where + " (X,Y row:SLOT game:ROW timeline:TIME log view)");
                 }
                 return new int[]{Integer.parseInt(xy[0].trim()), Integer.parseInt(xy[1].trim())};
             }
@@ -639,7 +648,7 @@ final class Selftest {
             }
             case "follow" -> actual = String.valueOf(game.followedSlot());
             case "state" -> actual = clock.state().name();
-            case "help", "log", "scoreboard", "inspector", "status", "timeline" -> actual = hud.isShown(
+            case "help", "games", "log", "scoreboard", "inspector", "status", "timeline" -> actual = hud.isShown(
                     what) ? "on" : "off";
             case "flee" -> actual = hud.aiLog().fleeShown() ? "on" : "off";
             case "camera" -> actual = game.looksAtPicked(CAMERA_METERS) ? "picked" : "elsewhere";

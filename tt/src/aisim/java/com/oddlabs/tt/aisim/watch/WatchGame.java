@@ -3,6 +3,7 @@ package com.oddlabs.tt.aisim.watch;
 import com.oddlabs.net.NetworkSelector;
 import com.oddlabs.tt.Main;
 import com.oddlabs.tt.aikit.AiLog;
+import com.oddlabs.tt.aisim.Aisim;
 import com.oddlabs.tt.aisim.play.ClientWorld;
 import com.oddlabs.tt.aisim.play.Job;
 import com.oddlabs.tt.camera.GameCamera;
@@ -30,6 +31,9 @@ import com.oddlabs.tt.viewer.WorldViewer;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -615,6 +619,34 @@ final class WatchGame implements Clock.Listener {
         } catch (IllegalArgumentException e) {
             return e.getMessage();
         }
+    }
+
+    /**
+     * Watches game {@code key} of the run in {@code run_dir} instead: writes the arguments of the next start where
+     * aisim.sh looks for them and leaves the program, which the script then starts again (one start of the client
+     * plays one game). {@code filter} is the list's, for the next start's list. A selftest only writes them.
+     */
+    void open(@NonNull Path run_dir, @NonNull String key, Recordings.@NonNull Filter filter) {
+        String next = file.nextFile();
+        String picked = run_dir.getFileName() + " " + key;
+        if (next == null) {
+            clock.say("cannot start again from here on " + picked);
+            return;
+        }
+        List<String> arguments = new ArrayList<>(List.of(Aisim.slash(run_dir), key));
+        arguments.addAll(file.again());
+        arguments.addAll(List.of("--filter", filter.argument()));
+        try {
+            Files.write(Path.of(next), arguments, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            clock.say("cannot write " + next + ": " + e.getMessage());
+            return;
+        }
+        if (selftest != null) {
+            clock.say("picked " + picked + ": a selftest does not start again");
+            return;
+        }
+        quit(0);
     }
 
     /** Leaves the program with {@code status} (the selftest's result). */

@@ -84,7 +84,8 @@ public final class WatchCommand {
      * watch file, as {@link WatchFile} describes them; the options are checked by Aisim.
      */
     public record Request(@NonNull List<String> game, boolean aiFromRun, int checkpointTicks,
-                          int checkpointMegabytes, boolean presim, @Nullable String selftest) {
+                          int checkpointMegabytes, boolean presim, @Nullable String selftest,
+                          @Nullable String folder, @NonNull String filter, @Nullable String next) {
     }
 
     /**
@@ -102,7 +103,14 @@ public final class WatchCommand {
      * notes and then the file's absolute path, as the last line.
      */
     public static int run(@NonNull Request request) throws IOException {
-        Resolved game = resolve(request.game(), request.aiFromRun());
+        Recordings.Filter filter = Recordings.Filter.of(request.filter());
+        if (filter == null) {
+            throw new UsageException("--filter is all, timeout or decided; not " + request.filter());
+        }
+        Path recordings = recordings(request);
+        // no game named: the list of games is open from the start
+        boolean browse = !namesGame(request.game());
+        Resolved game = resolve(named(request.game(), recordings, filter), request.aiFromRun());
         String snap = thisSnapshot();
         Path out = WATCH.resolve(game.name()).toAbsolutePath().normalize();
         Files.createDirectories(out);
@@ -116,9 +124,19 @@ public final class WatchCommand {
             Files.deleteIfExists(out.resolve("selftest.txt"));
         }
         String game_file = game.gameFile() == null ? null : slash(game.gameFile());
+        // a selftest ends with its report: what its script picks goes to its own folder, where aisim.sh does not look
+        String next = request.selftest() != null ? slash(out.resolve(
+                "next.txt")) : request.next() == null ? null : slash(Path.of(
+                        request.next()).toAbsolutePath().normalize());
+        List<String> again = new ArrayList<>(List.of("--folder", slash(recordings), "--checkpoint", String.valueOf(
+                request.checkpointTicks()), "--checkpoint-memory", String.valueOf(request.checkpointMegabytes())));
+        if (request.aiFromRun()) {
+            again.add("--ai-from-run");
+        }
         WatchFile watch = new WatchFile(game.job(), game_file, game.endTick(), snap, game.runSnap(), game.loaders(),
                 slash(out), request.checkpointTicks(), request.checkpointMegabytes(), request.presim(),
-                request.selftest());
+                request.selftest(), slash(recordings), filter.argument(), browse, next,
+                List.copyOf(again));
         Aisim.JSON.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), watch);
         Job job = game.job();
         System.out.printf(Locale.ROOT, "watch %s %s: %s, %s (seed %d, first player in slot %d)%n", job.run(),
@@ -134,9 +152,69 @@ public final class WatchCommand {
                 request.checkpointTicks(), new Times().span(request.checkpointTicks()), new Times().speedName(),
                 request.checkpointMegabytes(), heapText(System.getenv(HEAP_VARIABLE)),
                 HEAP_VARIABLE);
+        System.out.println("  G lists the recorded games in " + shown(recordings) + " (" + filter.label() + ")");
         System.out.println("  watch file " + shown(file) + ", the session's output in " + shown(out) + "/");
         System.out.println(slash(file)); // last: aisim.sh starts the game with it
         return 0;
+    }
+
+    /**
+     * The folder of recordings the view lists: {@code --folder}, else the folder the named run is in, else this
+     * checkout's runs.
+     */
+    private static @NonNull Path recordings(@NonNull Request request) {
+        String folder = request.folder();
+        List<String> game = request.game();
+        try {
+            if (folder != null) {
+                Path path = Path.of(folder).toAbsolutePath().normalize();
+                if (!Files.isDirectory(path)) {
+                    throw new UsageException("--folder " + folder + " is not a folder");
+                }
+                return path;
+            }
+            if (!game.isEmpty() && !game.get(0).endsWith(".jsonl")) {
+                Path parent = runDir(game.get(0)).getParent();
+                if (parent != null) {
+                    return parent;
+                }
+            }
+        } catch (InvalidPathException e) {
+            throw new UsageException("not a folder name: " + folder);
+        }
+        return Runs.RUNS.toAbsolutePath().normalize();
+    }
+
+    /**
+     * The game to watch as {@link #resolve} takes it: {@code game} itself when it names one ({@code RUN KEY} or
+     * {@code FILE.jsonl}); for a run alone its first game that {@code filter} shows, and for nothing that game of
+     * the newest run of {@code recordings} that has one.
+     */
+    private static @NonNull List<String> named(@NonNull List<String> game, @NonNull Path recordings,
+            Recordings.@NonNull Filter filter) throws IOException {
+        if (namesGame(game)) {
+            return game;
+        }
+        Recordings.Pick pick;
+        if (game.isEmpty()) {
+            pick = Recordings.newest(recordings, filter);
+            if (pick == null) {
+                throw new UsageException("no run in " + shown(
+                        recordings) + " has " + filter.label() + ": name a game (RUN KEY), another --folder or another --filter");
+            }
+        } else {
+            Path dir = runDir(game.get(0));
+            pick = Recordings.first(dir, filter);
+            if (pick == null) {
+                throw new UsageException("run " + dir.getFileName() + " has no " + filter.label());
+            }
+        }
+        return List.of(slash(pick.run_dir()), pick.key());
+    }
+
+    /** Whether {@code game} names a game ({@code RUN KEY} or {@code FILE.jsonl}), not only a run or nothing. */
+    private static boolean namesGame(@NonNull List<String> game) {
+        return game.size() == 2 || (game.size() == 1 && game.get(0).endsWith(".jsonl"));
     }
 
     /** Deletes the watch files written more than a day ago: each start writes its own, read only while it loads. */
@@ -163,7 +241,7 @@ public final class WatchCommand {
         if (args.size() == 1 && args.get(0).endsWith(".jsonl")) {
             return fileGame(args.get(0), ai_from_run);
         }
-        throw new UsageException("watch takes RUN KEY, or a game file FILE.jsonl; not " + args);
+        throw new UsageException("watch takes RUN KEY, a game file FILE.jsonl, RUN or nothing; not " + args);
     }
 
     // ---------------------------------------------------------------- finding the game

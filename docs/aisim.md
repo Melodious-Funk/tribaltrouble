@@ -509,6 +509,9 @@ from there: `--eventload normal ../aisim/playtests/<millis>/event.log`.
 ./aisim.sh watch base s19-1                        # game s19-1 of run base, in the game client
 ./aisim.sh watch aisim/runs/base/g/s19-1.jsonl     # the same game, named by its game file
 ./aisim.sh watch ../other-checkout/aisim/runs/base s19-1 --ai-from-run   # a run of another checkout
+./aisim.sh watch                                   # the newest game, with the list of recorded games open
+./aisim.sh watch --filter timeout                  # the newest game that ended at the time limit, and those in the list
+./aisim.sh watch base                              # the first game of run base, with the list open
 ```
 
 `watch` plays a recorded harness game again in the game client itself, with nobody seated: the same world, the
@@ -524,6 +527,19 @@ their slots, the map code, the world's seed). A game file alone (FILE.jsonl, suc
 Play-test files cannot be watched: the human's orders are not in them (re-simulate one as [Play-tests](#play-tests)
 says). Before the game starts, `watch` prints what it found and anything that may make the game differ from the
 recording.
+
+**The recorded games.** G opens a list of the folder of recordings, in the game: its runs, newest first, each with
+when its last game ended, how many games it has and how many of them ended at the time limit. A click on a run lists
+its games (the first row, or Backspace, goes back to the runs): each game's key, team A's result, how it ended, its
+length in game time, and every team's units and kills at the end, team A's first. F filters them: all, those that
+ended at the time limit, those won or lost. The wheel scrolls; the game on the screen is lit. A click on a game
+watches it: the program ends and `./aisim.sh watch` starts it again on that game, since one start of the client plays
+one game (a few seconds; the list then opens with G where you left it). The folder is `--folder DIR` (a folder of
+runs, or one run), else the folder the named run is in, else `aisim/runs`. Without a game, `watch` starts on the
+newest run's first game (of RUN, with a run alone) that `--filter all|timeout|decided` shows, with the list open. A
+game whose file was not kept (`--record-every`) is listed with `no game file`: it plays from the run's job, with
+nothing to verify against and no timeline events. With many games (a training run), let `batch --record-every N`
+keep few files: the list reads the result rows, which every game has.
 
 **Is it the same game?** The viewer checks itself as it plays: every 30 game seconds it compares the world's checksum
 with the census checksum the recording has for that second, and its status panel shows `VERIFIED to 51:30`
@@ -647,6 +663,8 @@ in white, its notes and examples dimmer.
 | S | the status panel and the jump box under it: show or hide; hidden, J still opens the jump box (at the top), and messages show at the top while fresh |
 | R | the timeline: show or hide (with the compass off, the AI log takes its room) |
 | A, Shift+A | the followed AI's overlay: all layers, none, each layer alone ([AI overlays](#ai-overlays)) |
+| G | the recorded games of the folder: its runs, a run's games; click a game to watch it; Esc closes it too |
+| F, Backspace | in that list: the next filter of a run's games (all, at the time limit, won or lost); back to the runs |
 | F1 or H | the help; Esc closes it too |
 | Ctrl+H | hide the whole HUD (a clean view for screenshots) |
 | Esc | the menu, as in a game |
@@ -656,7 +674,8 @@ in white, its notes and examples dimmer.
 | left click in the view | inspect that unit or building (any player's), with a ring on it |
 | click a scoreboard row | follow that player (the camera goes there, a little zoomed out) |
 | timeline | click or drag, let go to jump; hover a mark to read its event |
-| wheel | zoom, three times as far out as in a game; over the AI log, older lines |
+| list of games | click a run for its games, a game to watch it (the program starts again on it) |
+| wheel | zoom, three times as far out as in a game; over the AI log, older lines; over the list of games, its rows |
 
 The camera moves as in a game (arrow keys, screen edges, Home/End, Insert/Delete, the overview map), but zooms out
 three times as high (as the cinematic camera does), and glides when it goes somewhere, keeping its zoom; the view
@@ -721,13 +740,14 @@ is done:
   such as `F1`, `N`, `RETURN`, `ESCAPE`, or `. , [ ] + -`, after `shift+`, `ctrl+` or `alt+`), `tap:KEY` (the same
   without the wait, to press E again while it simulates), `type:TEXT` (into the jump box after `key:J`), and the
   left mouse button and the wheel: `click:WHERE`, `hover:WHERE`, `press:WHERE`, `drag:WHERE`, `release`, `wheel:N`
-  (notches, up is positive), WHERE being `X,Y` (GUI units from the bottom left), `row:SLOT` (a scoreboard row),
+  (notches, up is positive), WHERE being `X,Y` (GUI units from the bottom left), `row:SLOT` (a scoreboard row), `game:ROW` (a row of the list of games as
+  shown, from 0; a game picked in a selftest is only written to `next.txt` in its output folder),
   `timeline:TIME`, `log` or `view` (the middle of the window). `key:ESCAPE` with no help or jump box open opens the
   Esc menu, which stops the clock: a step that waits on the clock fails while it is open (`key:ESCAPE` again closes
   it);
 - checks: `verify` fails on a divergence or a rewind mismatch, or when no census was compared yet;
   `expect:WHAT=VALUE` fails unless `tick` (a time as the jump box reads it), `follow` (a slot), `state` (`PLAYING`, `PAUSED`, `SEEKING`,
-  `ENDED`), `help`, `log`, `scoreboard`, `inspector`, `status`, `timeline` or `flee` (`on`/`off`), `inspect`
+  `ENDED`), `help`, `games`, `log`, `scoreboard`, `inspector`, `status`, `timeline` or `flee` (`on`/`off`), `inspect`
   (`none` or a kind), `message` (a text the status panel's message contains), `camera` (`picked`: it looks at the
   picked object, within 6 m; else `elsewhere`), `tracking` (`on`/`off`, Shift+C), `steady` (comma-separated panels
   as `layout` names them, or `all`: each was on the screen all through the last `layout` step and kept its x and
@@ -755,7 +775,7 @@ only so far), `--no-logs`, `--classes` (what the copier copied and shared, by cl
 as the viewer's are at its default clock speed, ludicrous (`12:30`, `90`, `t4500`).
 
 Leaving: Esc, then Quit (and confirm), or closing the window (and confirm) ends the program: one game per start of
-the client, with no main menu to go back to. Limits: a game whose recording ended in a crash, hang or error may fail
+the client, with no main menu to go back to (a game picked from G's list is a new start). Limits: a game whose recording ended in a crash, hang or error may fail
 the same way when the viewer gets there; a game file without its end line (a game still being played) plays on
 until you stop it, and its timeline grows with what was simulated.
 
@@ -859,8 +879,8 @@ The same list as `./aisim.sh help`:
 ./aisim.sh lab     FILE.java [args]
 ./aisim.sh freeze  TAG NAME|CLASS [--from DIR|JAR]
 ./aisim.sh gui     [--stale-ok] SPEC [game args]
-./aisim.sh watch   RUN KEY | FILE.jsonl [--ai-from-run] [--checkpoint TICKS] [--checkpoint-memory MB] [--presim]
-                   [--selftest SCRIPT]
+./aisim.sh watch   [RUN [KEY] | FILE.jsonl] [--folder DIR] [--filter all|timeout|decided] [--ai-from-run]
+                   [--checkpoint TICKS] [--checkpoint-memory MB] [--presim] [--selftest SCRIPT]
 ./aisim.sh rewindcheck RUN KEY | FILE.jsonl [--ai-from-run] [--at TIME,TIME] [--span TIME] [--gl]
 --players: the teams, separated by vs, each one or more players P; 2..32 players in all. Teams are named
   A, B, C, ... in that order; team A is the one summary and compare report. Games play on until one team
@@ -925,7 +945,9 @@ GAME: --minutes M (the time limit in game minutes; a game that reaches it is a d
   between rewind checkpoints at first, `--checkpoint-memory MB` (default 45% of the heap, at most 80%) their memory in all,
   `--presim` simulates the whole game first (shown as it runs; a `--selftest` has its own `presim` step instead),
   `--ai-from-run` plays AIs named by package from the snapshot
-  that recorded the game, `--selftest SCRIPT` runs a script and quits. `AISIM_WATCH_HEAP` (default `6g`) is the heap
+  that recorded the game, `--selftest SCRIPT` runs a script and quits, `--folder DIR` is the folder of recordings
+  its list of games shows (default: the named run's, else `aisim/runs`) and `--filter all|timeout|decided` the games
+  the list shows at first and the game `watch` starts on when none is named. `AISIM_WATCH_HEAP` (default `6g`) is the heap
   of the game, and of `rewindcheck`.
 - **Exit codes**: 0 ok; 1 the run has failed games or no counted games, a replay did not reproduce its game,
   `compare` found no common games, a `watch --selftest` check or a `rewindcheck` failed, or `watch`'s game or
@@ -990,7 +1012,9 @@ aisim/                                  (in the repository root, git-ignored)
   watch/<run>-<key>-<unique>.json       what `watch` hands the game: the job, the recording, the AIs from jars, the
                                         options (absolute paths); one per start, deleted after a day
   watch/<run>-<key>/                    the watched game's output: selftest.txt, the screenshots and the AI logs
-                                        (ai-s<slot>.log) of --selftest
+                                        (ai-s<slot>.log) of --selftest, and next.txt, the game its script picked
+  watch/next-<pid>.txt                  the arguments of watch's next start, written by the game when a game of its
+                                        list is picked and read by aisim.sh, which then deletes it
   natives/gui, natives/watch, natives/rewindcheck   native libraries unpacked for `gui`, `watch`, `rewindcheck` (ignore)
 ```
 

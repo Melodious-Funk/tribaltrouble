@@ -95,9 +95,12 @@ public final class Aisim {
               lab     FILE.java [args]           run your own tool (lab/NAME/) on the last build's class path
               freeze  TAG NAME|CLASS [--from DIR|JAR]   freeze an AI package as opponent @TAG
               gui     [--stale-ok] SPEC [game args]     play the game yourself; SPEC plays the skirmish Hard slots
-              watch   RUN KEY | FILE.jsonl [--ai-from-run] [--checkpoint TICKS] [--checkpoint-memory MB] [--presim]
-                      [--selftest SCRIPT]        a harness game in the game client, played again exactly: pause,
-                                                 step, rewind, jump, any speed; click any unit or building; AI logs
+              watch   [RUN [KEY] | FILE.jsonl] [--folder DIR] [--filter all|timeout|decided] [--ai-from-run]
+                      [--checkpoint TICKS] [--checkpoint-memory MB] [--presim] [--selftest SCRIPT]
+                                                 a harness game in the game client, played again exactly: pause,
+                                                 step, rewind, jump, any speed; click any unit or building; AI logs;
+                                                 G lists the folder's recorded games, to watch another. Without a
+                                                 game: the newest one, with that list open
               rewindcheck RUN KEY | FILE.jsonl [--ai-from-run] [--at TIME,TIME] [--span TIME] [--gl]
                                                  check that watch's rewind plays a game exactly as the first time
             --players: the teams, separated by vs, each one or more players P; 2..32 players in all. Teams are named
@@ -343,13 +346,15 @@ public final class Aisim {
     }
 
     /**
-     * watchfile RUN KEY | FILE.jsonl [--ai-from-run] [--checkpoint TICKS] [--checkpoint-memory MB] [--presim]
-     * [--selftest SCRIPT] [--stale-ok]: checks the options and the build's freshness (the viewer's code must be in the
+     * watchfile [RUN [KEY] | FILE.jsonl] [--folder DIR] [--filter NAME] [--next FILE] [--ai-from-run]
+     * [--checkpoint TICKS] [--checkpoint-memory MB] [--presim] [--selftest SCRIPT] [--stale-ok]: checks the options and
+     * the build's freshness (the viewer's code must be in the
      * snapshot), then writes the watch file and prints its path last, for ./aisim.sh watch to start the game with.
      */
     private static int watchFile(@NonNull Options options) throws IOException {
-        options.check(Set.of("ai-from-run", "checkpoint", "checkpoint-memory", "presim", "selftest", "stale-ok"),
-                options.args.size() == 1 ? 1 : 2); // FILE.jsonl or RUN KEY
+        // RUN KEY, FILE.jsonl, RUN (its first game) or nothing (the newest game)
+        options.check(Set.of("ai-from-run", "checkpoint", "checkpoint-memory", "presim", "selftest", "stale-ok",
+                "folder", "filter", "next"), Math.min(options.args.size(), 2));
         Snapshot.requireFresh(options.flag("stale-ok"));
         int checkpoint = options.integer("checkpoint", WatchCommand.DEFAULT_CHECKPOINT_TICKS, 50, 1_000_000);
         // the checkpoints live in the game's heap, which aisim.sh sets from the same variable
@@ -368,7 +373,8 @@ public final class Aisim {
             throw new UsageException("--selftest needs a script, steps separated by ;, such as \"play:3;verify;quit\"");
         }
         return WatchCommand.run(new WatchCommand.Request(options.args, options.flag("ai-from-run"), checkpoint, memory,
-                options.flag("presim"), selftest));
+                options.flag("presim"), selftest, options.get("folder"), options.get("filter", "all"), options.get(
+                        "next")));
     }
 
     /** A run's setup and its jobs. */

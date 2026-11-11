@@ -29,10 +29,19 @@ import java.util.List;
  * @param presim              whether to simulate the whole game before showing it (every jump is then quick)
  * @param selftest            a scripted check to run instead of waiting for the user, then quit with its
  *                            result (null: none)
+ * @param recordings          the folder of runs the view lists (G), or a single run's folder
+ * @param filter              which games of a run the list shows at first (Recordings.Filter's argument)
+ * @param browse              whether the list is open from the start (no game was named)
+ * @param nextFile            where the game writes the arguments of the next start when a game of the list is
+ *                            picked, one a line, for aisim.sh to start again with (a selftest's goes to its output
+ *                            folder, and nothing starts again); null when the game was not started by aisim.sh
+ * @param again               the options of this start that a next start repeats
  */
 public record WatchFile(@NonNull Job job, @Nullable String gameFile, int endTick, @NonNull String snap,
                         @NonNull String runSnap, @NonNull List<Loader> loaders, @NonNull String outDir,
-                        int checkpointTicks, int checkpointMegabytes, boolean presim, @Nullable String selftest) {
+                        int checkpointTicks, int checkpointMegabytes, boolean presim, @Nullable String selftest,
+                        @NonNull String recordings, @NonNull String filter, boolean browse,
+                        @Nullable String nextFile, @NonNull List<String> again) {
 
     /**
      * An AI whose package comes from a jar: every seat whose spec names {@code name} (before any {@code :params}, such

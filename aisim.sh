@@ -89,27 +89,42 @@ case "${1:-help}" in
     watch)
         # A harness game in the game client (docs/aisim.md#watching-a-game). Aisim watchfile (internal) finds the game
         # from the repository root, writes the watch file with absolute paths and prints its path as its last line;
-        # the game then loads it in tt/, as for gui, with the rewind's options and a heap for its checkpoints.
+        # the game then loads it in tt/, as for gui, with the rewind's options and a heap for its checkpoints. One
+        # start of the game plays one game: when another is picked from its list of games (G), the game writes the
+        # next start's arguments, one a line, to the file --next names and ends, and the loop starts it on them.
         shift
         read_snapshot # once: the watch file and the game name the snapshot they run from
         cp_args="aisim/snap/$snap/cp.args"
-        found=$("$JDK/bin/java" "${OPTS[@]}" "-Daisim.snap=$snap" "@$cp_args" com.oddlabs.tt.aisim.Aisim watchfile \
-            "$@") || {
-            status=$?
-            [ -z "$found" ] || printf '%s\n' "$found"
-            exit "$status"
-        }
-        watch_file=${found##*$'\n'}
-        [ "$watch_file" = "$found" ] || printf '%s\n' "${found%$'\n'*}"
-        if [ ! -f "$watch_file" ]; then
-            echo "aisim: watchfile wrote no watch file (its last line: '$watch_file')" >&2
-            exit 3
-        fi
-        cd tt
-        # -Xmx after GUI_OPTS: the last one wins, and GUI_OPTS stays as gradlew :tt:run has it
-        exec "$JDK/bin/java" "${GUI_OPTS[@]}" "${WATCH_OPTS[@]}" "-Xmx$WATCH_HEAP" "-Daisim.watch=$watch_file" \
-            "-Daisim.snap=$snap" "-Dorg.lwjgl.system.SharedLibraryExtractPath=../aisim/natives/watch" "@../$cp_args" \
-            com.oddlabs.tt.Main
+        mkdir -p aisim/watch
+        next="aisim/watch/next-$$.txt"
+        watch_args=("$@")
+        while :; do
+            rm -f "$next"
+            # ${a[@]+...}: "${a[@]}" of an empty array fails under set -u in macOS's bash 3.2
+            found=$("$JDK/bin/java" "${OPTS[@]}" "-Daisim.snap=$snap" "@$cp_args" com.oddlabs.tt.aisim.Aisim \
+                watchfile --next "$next" ${watch_args[@]+"${watch_args[@]}"}) || {
+                status=$?
+                [ -z "$found" ] || printf '%s\n' "$found"
+                exit "$status"
+            }
+            watch_file=${found##*$'\n'}
+            [ "$watch_file" = "$found" ] || printf '%s\n' "${found%$'\n'*}"
+            if [ ! -f "$watch_file" ]; then
+                echo "aisim: watchfile wrote no watch file (its last line: '$watch_file')" >&2
+                exit 3
+            fi
+            status=0
+            # -Xmx after GUI_OPTS: the last one wins, and GUI_OPTS stays as gradlew :tt:run has it
+            (cd tt && exec "$JDK/bin/java" "${GUI_OPTS[@]}" "${WATCH_OPTS[@]}" "-Xmx$WATCH_HEAP" \
+                "-Daisim.watch=$watch_file" "-Daisim.snap=$snap" \
+                "-Dorg.lwjgl.system.SharedLibraryExtractPath=../aisim/natives/watch" "@../$cp_args" \
+                com.oddlabs.tt.Main) || status=$?
+            [ -f "$next" ] || exit "$status"
+            watch_args=()
+            while IFS= read -r line || [ -n "$line" ]; do
+                watch_args+=("${line%$'\r'}")
+            done <"$next"
+        done
         ;;
     rewindcheck)
         # Does watch's rewind play a game exactly as the first time? From the repository root, as the parent JVM, with
