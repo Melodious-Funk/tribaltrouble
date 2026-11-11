@@ -72,6 +72,12 @@ To follow a run in a browser (charts of every number below, and what the trainer
 python3 lab/neural/dashboard.py            # opens http://localhost:8642 and reads aisim/neural/*/ every 5 s
 ```
 
+From the page you can also start a run or go on with one (it runs `train.py`, detached: the run goes on when the
+dashboard stops; its output is in `aisim/neural/RUN/train.out`), stop one after its generation (the `STOP` file)
+or at once (the generation it is in is lost and played again), and open a kept game in the viewer ("Watch", which
+runs `./aisim.sh watch` and so needs the `neural-watch` branch and a desktop). The server listens on this machine
+only and acts only for its own page.
+
 It needs only Python's standard library and reads `log.jsonl` (a line per generation), `status.json` (the phase and
 the batch the trainer waits for) and `args.json` (the settings), which `train.py` writes. Besides the scores, a
 log line has the results per opponent (`results`: games, wins, losses, draws, those at the time limit), how often
