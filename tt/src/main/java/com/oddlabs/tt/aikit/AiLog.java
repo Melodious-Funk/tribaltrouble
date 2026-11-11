@@ -125,6 +125,15 @@ public final class AiLog {
         }
     }
 
+    /**
+     * The harness's label of this game, such as {@code key=s3-1 snap=1a2b3c4d5e}; empty in a game the harness did not
+     * start. For an AI that names files of its own after the game, as a learning AI does with what it records. It
+     * says nothing about the game's state, so never decide by it.
+     */
+    public @NonNull String game() {
+        return header;
+    }
+
     // ---------------------------------------------------------------- for the harness and the recorder
 
     public int errors() {

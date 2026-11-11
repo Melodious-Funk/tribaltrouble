@@ -41,7 +41,9 @@ first opponent to beat.
 - **`AiLog`**: get it once in the constructor with `log = AiLog.of(getOwner())`. `log.log(TOPIC, () -> text)` writes
   a decision log line (only in `play`, `replay` and GUI play-tests; otherwise it costs one field check).
   `log.count(key)` adds to a counter that shows in every result row and batch summary. `log.error(where, e)` records
-  an exception you caught; the game goes on and the count shows in every row.
+  an exception you caught; the game goes on and the count shows in every row. `log.game()` is the harness's label of
+  the game (`key=s3-1 snap=...`, empty outside the harness), for an AI that names files of its own after the game;
+  never decide by it.
 - `AiLog`, `AiParams` and `GameTime` are the AI's toolkit, `com.oddlabs.tt.aikit`. Its subpackage `aikit.harness`
   is the harness's.
 - **Ships**: harness games never have ships. GUI games have them only on Archipelago maps or with the Ships advanced
