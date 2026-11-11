@@ -24,16 +24,24 @@ import java.util.regex.Pattern;
 final class Recordings {
     private static final String RESULTS = "results.jsonl";
     private static final String TIMEOUT_END = "\"end\":\"timeout\"";
+    /** A row's own result, team A's: its teams have none of their own. */
+    private static final String WIN = "\"result\":\"win\"";
+    private static final String LOSS = "\"result\":\"loss\"";
+    private static final String DRAW = "\"result\":\"draw\"";
+    /** A row's lineup: its first "players", before those of its teams. */
+    private static final Pattern PLAYERS = Pattern.compile("\"players\":\"((?:[^\"\\\\]|\\\\.)*)\"");
     private static final Pattern KEY = Pattern.compile("s(\\d+)-(\\d+)");
 
     private Recordings() {
     }
 
     /**
-     * A run folder: its name, when its results were written last (epoch milliseconds), how many games it has and how
-     * many of them ended at the time limit.
+     * A run folder: its name, when its results were written last (epoch milliseconds), its lineup (its first game's:
+     * the games of a run differ in the seats, not the players), how many games it has, how many of them team A won,
+     * lost and drew, and how many ended at the time limit.
      */
-    record Run(@NonNull Path dir, @NonNull String name, long modified, int games, int timeouts) {
+    record Run(@NonNull Path dir, @NonNull String name, long modified, @NonNull String players, int games, int wins,
+               int losses, int draws, int timeouts) {
     }
 
     /**
@@ -121,8 +129,84 @@ final class Recordings {
         String rows = Files.readString(results, StandardCharsets.UTF_8);
         int games = (int) rows.lines().filter(line -> !line.isBlank()).count();
         Path absolute = dir.toAbsolutePath().normalize();
+        Matcher players = PLAYERS.matcher(rows);
         return new Run(absolute, String.valueOf(absolute.getFileName()), Files.getLastModifiedTime(
-                results).toMillis(), games, count(rows, TIMEOUT_END));
+                results).toMillis(), players.find() ? players.group(1) : "", games, count(rows, WIN), count(rows,
+                        LOSS), count(rows, DRAW), count(rows, TIMEOUT_END));
+    }
+
+    /**
+     * A lineup in short, for a column or a line of the HUD: each player's name, and of its parameters only the file
+     * it names first, without folders and ending ({@code neural:net=a/b/g000020.bin,seed=3 vs easy} is
+     * {@code neural g000020 vs easy}); parameters that name no file stay as they are.
+     */
+    static @NonNull String shortLineup(@NonNull String players) {
+        List<String> words = new ArrayList<>();
+        for (String word : players.trim().split("\\s+")) {
+            int colon = word.indexOf(':');
+            if (colon < 0) {
+                words.add(word);
+                continue;
+            }
+            String shown = word;
+            for (String parameter : word.substring(colon + 1).split(",")) {
+                String value = parameter.substring(parameter.indexOf('=') + 1);
+                int slash = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+                if (slash >= 0) {
+                    String file = value.substring(slash + 1);
+                    int dot = file.lastIndexOf('.');
+                    shown = word.substring(0, colon) + " " + (dot > 0 ? file.substring(0, dot) : file);
+                    break;
+                }
+            }
+            words.add(shown);
+        }
+        return String.join(" ", words);
+    }
+
+    /**
+     * The folder of the run the game of {@code file} is of: where its game file is (in the run's g/ or replay
+     * folder), else the run of its name in the folder of recordings, or that folder itself when it is the run.
+     */
+    static @NonNull Path runDir(@NonNull WatchFile file) {
+        if (file.gameFile() != null) {
+            Path run = Path.of(file.gameFile()).getParent().getParent();
+            if (run != null) {
+                return run;
+            }
+        }
+        Path folder = Path.of(file.recordings());
+        return Files.isRegularFile(folder.resolve(RESULTS)) ? folder : folder.resolve(file.job().run());
+    }
+
+    /** Game {@code key} of the run in {@code run_dir}, from its result row; null without one (or without the run). */
+    static @Nullable Game game(@NonNull Path run_dir, @NonNull String key) {
+        try {
+            for (Game game : games(run_dir)) {
+                if (game.key().equals(key)) {
+                    return game;
+                }
+            }
+        } catch (IOException e) {
+            // no rows to read: as a game without one
+        }
+        return null;
+    }
+
+    /** How a game ended, in words: {@code at the time limit}, {@code eliminated}, else as its row says. */
+    static @NonNull String endText(@NonNull Game game) {
+        return switch (game.end()) {
+            case "timeout" -> "at the time limit";
+            case "elim" -> "eliminated";
+            default -> game.end();
+        };
+    }
+
+    /** A game's length as a clock time of its own game time: {@code 30:00}, {@code 1:02:03}. */
+    static @NonNull String lengthText(@NonNull Game game) {
+        long seconds = Math.round(game.seconds());
+        return seconds >= 3600 ? String.format(Locale.ROOT, "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60,
+                seconds % 60) : String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
     }
 
     private static int count(@NonNull String text, @NonNull String part) {

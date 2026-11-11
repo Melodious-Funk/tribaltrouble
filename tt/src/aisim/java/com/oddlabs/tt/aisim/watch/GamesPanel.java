@@ -46,8 +46,8 @@ final class GamesPanel extends HudPanel {
     private static final String CLOSE = "G or Esc closes";
     private static final DateTimeFormatter WHEN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT);
     /** The columns of the runs and of a run's games; the first takes the room the others leave. */
-    private static final String[] RUN_COLUMNS = {"run", "last game", "games", "at the time limit"};
-    private static final String[] RUN_SAMPLES = {"", "0000-00-00 00:00", "00000", "00000"};
+    private static final String[] RUN_COLUMNS = {"run", "players", "last game", "games", "A won - lost - drew", "at the time limit"};
+    private static final String[] RUN_SAMPLES = {"", "neural g000000 vs neural g000000", "0000-00-00 00:00", "00000", "0000 - 0000 - 0000", "00000"};
     private static final String[] GAME_COLUMNS = {"game", "team A", "ended", "length", "units", "kills", ""};
     private static final String[] GAME_SAMPLES = {"s000000-00", "failed", "at the time limit", "0:00:00", "000 - 000 - 000", "000 - 000 - 000", "no game file"};
 
@@ -55,7 +55,7 @@ final class GamesPanel extends HudPanel {
     private final @NonNull Font font;
     private final @NonNull Path folder;
     /** The run and game on the screen: lit in the lists. */
-    private final @Nullable Path watched_run;
+    private final @NonNull Path watched_run;
     private final @NonNull String watched_key;
     private @NonNull List<Recordings.Run> runs = List.of();
     /** The run whose games are listed, or null while the runs are. */
@@ -77,9 +77,7 @@ final class GamesPanel extends HudPanel {
         this.font = Skin.getSkin().getEditFont();
         WatchFile file = game.file();
         this.folder = Path.of(file.recordings());
-        Path game_file = file.gameFile() == null ? null : Path.of(file.gameFile()).getParent();
-        // a run's game file is in its g/ folder
-        this.watched_run = game_file == null ? null : game_file.getParent();
+        this.watched_run = Recordings.runDir(file);
         this.watched_key = game.job().key();
         Recordings.Filter named = Recordings.Filter.of(file.filter());
         this.filter = named == null ? Recordings.Filter.ALL : named;
@@ -133,9 +131,9 @@ final class GamesPanel extends HudPanel {
         clampScroll();
     }
 
-    /** Whether {@code run} is the run of the game on the screen: by its folder, or by name without a game file. */
+    /** Whether {@code run} is the run of the game on the screen. */
     private boolean watchedRun(Recordings.@NonNull Run run) {
-        return watched_run != null ? run.dir().equals(watched_run) : run.name().equals(game.job().run());
+        return run.dir().equals(watched_run);
     }
 
     private boolean watched(Recordings.@NonNull Run run, Recordings.@NonNull Game listed) {
@@ -279,9 +277,20 @@ final class GamesPanel extends HudPanel {
         int right = getWidth() - PADDING;
         String when = WHEN.format(Instant.ofEpochMilli(run.modified()).atZone(ZoneId.systemDefault()));
         TextLineRenderer.render(renderer, font, run.name(), x[0], y, 0, x[1] - COLUMN_GAP, Color.WHITE);
-        TextLineRenderer.render(renderer, font, when, x[1], y, 0, right, TextPanel.DIM);
-        TextLineRenderer.render(renderer, font, String.valueOf(run.games()), x[2], y, 0, right, Color.WHITE);
-        TextLineRenderer.render(renderer, font, String.valueOf(run.timeouts()), x[3], y, 0, right,
+        TextLineRenderer.render(renderer, font, Recordings.shortLineup(run.players()), x[1], y, 0,
+                x[2] - COLUMN_GAP, Color.WHITE);
+        TextLineRenderer.render(renderer, font, when, x[2], y, 0, right, TextPanel.DIM);
+        TextLineRenderer.render(renderer, font, String.valueOf(run.games()), x[3], y, 0, right, Color.WHITE);
+        // the counts in their own colours, as a game's result is in the list of games
+        float end = TextLineRenderer.render(renderer, font, String.valueOf(run.wins()), x[4], y, 0, right,
+                run.wins() > 0 ? TextPanel.GOOD : TextPanel.DIM);
+        end = TextLineRenderer.render(renderer, font, " - ", end, y, 0, right, TextPanel.DIM);
+        end = TextLineRenderer.render(renderer, font, String.valueOf(run.losses()), end, y, 0, right,
+                run.losses() > 0 ? TextPanel.BAD : TextPanel.DIM);
+        end = TextLineRenderer.render(renderer, font, " - ", end, y, 0, right, TextPanel.DIM);
+        TextLineRenderer.render(renderer, font, String.valueOf(run.draws()), end, y, 0, right,
+                run.draws() > 0 ? TextPanel.WARN : TextPanel.DIM);
+        TextLineRenderer.render(renderer, font, String.valueOf(run.timeouts()), x[5], y, 0, right,
                 run.timeouts() > 0 ? TextPanel.WARN : TextPanel.DIM);
     }
 
@@ -296,16 +305,9 @@ final class GamesPanel extends HudPanel {
             default -> TextPanel.BAD;
         };
         TextLineRenderer.render(renderer, font, listed.result(), x[1], y, 0, right, result_color);
-        String end = switch (listed.end()) {
-            case "timeout" -> "at the time limit";
-            case "elim" -> "eliminated";
-            default -> listed.end();
-        };
-        TextLineRenderer.render(renderer, font, end, x[2], y, 0, x[3] - COLUMN_GAP, Color.WHITE);
-        long seconds = Math.round(listed.seconds());
-        String length = seconds >= 3600 ? String.format(Locale.ROOT, "%d:%02d:%02d", seconds / 3600,
-                seconds / 60 % 60, seconds % 60) : String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
-        TextLineRenderer.render(renderer, font, length, x[3], y, 0, right, Color.WHITE);
+        TextLineRenderer.render(renderer, font, Recordings.endText(listed), x[2], y, 0, x[3] - COLUMN_GAP,
+                Color.WHITE);
+        TextLineRenderer.render(renderer, font, Recordings.lengthText(listed), x[3], y, 0, right, Color.WHITE);
         TextLineRenderer.render(renderer, font, listed.units(), x[4], y, 0, x[5] - COLUMN_GAP, Color.WHITE);
         TextLineRenderer.render(renderer, font, listed.kills(), x[5], y, 0, x[6] - COLUMN_GAP, Color.WHITE);
         if (!listed.file()) {

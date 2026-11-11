@@ -529,7 +529,8 @@ says). Before the game starts, `watch` prints what it found and anything that ma
 recording.
 
 **The recorded games.** G opens a list of the folder of recordings, in the game: its runs, newest first, each with
-when its last game ended, how many games it has and how many of them ended at the time limit. A click on a run lists
+its players in short (a player's name and the file its parameters name, `neural g000020 vs easy`), when its last game
+ended, how many games it has, how many of them team A won, lost and drew, and how many ended at the time limit. A click on a run lists
 its games (the first row, or Backspace, goes back to the runs): each game's key, team A's result, how it ended, its
 length in game time, and every team's units and kills at the end, team A's first. F filters them: all, those that
 ended at the time limit, those won or lost. The wheel scrolls; the game on the screen is lit. A click on a game
@@ -562,7 +563,9 @@ AI changed in between:
   are at (below); then what the clock does, in colour: `PLAYING x16` green, `PAUSED` and `MENU (paused)` yellow,
   `SEEKING 45% to 12:00` and `PRESIM 45% to 1:42:41, back to 10:00` blue (with `, then plays` when it plays once
   there, and how fast it goes, `runs x103.6`), `ENDED` white, and `runs x3.2` in yellow when the machine cannot keep
-  up with the speed. Under it a warning when the game was played at another speed than the clock's; `check`, the
+  up with the speed. Under it a warning when the game was played at another speed than the clock's; `game`, its key, run
+  and players in short; `result`, what its result row says: team A's result, how and when it ended (in its own game
+  time), and every team's units and kills at the end (none for a game without a row yet); `check`, the
   verification (below: green, or red behind a warning sign); `rewind`, the checkpoints and their memory (yellow when
   rewind is off or stopped, with why); `overlay`, the AI overlay's layers (`none` for an AI that shows nothing);
   `note`, the last message (an error, the event N jumped to, the player followed) for as long as it is fresh (8 s),

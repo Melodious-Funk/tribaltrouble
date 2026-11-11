@@ -122,6 +122,9 @@ final class WatchHud implements WatchControls {
     private final @NonNull AiLogPanel ai_log;
     private final @NonNull HelpPanel help = new HelpPanel();
     private final @NonNull GamesPanel games;
+    /** The game's lineup in short and its result row, read once: the status panel's game and result lines. */
+    private final @NonNull String lineup;
+    private final Recordings.@Nullable Game recorded;
     /**
      * Panels about the followed AI, stacked above its log at the bottom right, the first lowest (an AI's own status
      * panel, from its AiView, belongs here).
@@ -168,6 +171,8 @@ final class WatchHud implements WatchControls {
         this.timeline = new Timeline(game);
         this.ai_log = new AiLogPanel(game);
         this.games = new GamesPanel(game);
+        this.lineup = Recordings.shortLineup(game.job().players());
+        this.recorded = Recordings.game(Recordings.runDir(game.file()), game.job().key());
         // added first is drawn lowest: the help over everything
         layer.addChild(timeline);
         layer.addChild(ai_log);
@@ -512,6 +517,20 @@ final class WatchHud implements WatchControls {
             lines.add(TextPanel.line().icon(HudIcons.warning()).text(
                     "times at " + times.speedName() + " speed; the game was played at " + played + " (T: clock speed)",
                     TextPanel.WARN).build());
+        }
+        lines.add(TextPanel.line().label("game").text(job.key()).text("of " + job.run() + ":", TextPanel.DIM).text(
+                lineup).build());
+        Recordings.Game result = recorded;
+        if (result != null) {
+            Vector4fc color = switch (result.result()) {
+                case "win" -> TextPanel.GOOD;
+                case "draw" -> TextPanel.WARN;
+                default -> TextPanel.BAD;
+            };
+            lines.add(TextPanel.line().label("result").text("team A").text(result.result(), color).text(
+                    Recordings.endText(result) + ", " + Recordings.lengthText(result)).gap(HINT_GAP).text("units",
+                            TextPanel.DIM).text(result.units()).gap(HINT_GAP).text("kills", TextPanel.DIM).text(
+                                    result.kills()).build());
         }
         lines.add(verificationLine(game.verification()));
         Rewinder rewinder = game.rewinder();
