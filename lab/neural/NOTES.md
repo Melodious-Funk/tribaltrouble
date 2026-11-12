@@ -149,6 +149,13 @@ games on the training maps, against itself, Hard and the teacher, and the new ne
 KL divergence of each head's choices, among the allowed ones) and to value as it does, for `--init-epochs` (40)
 passes; `init.json` in the run's folder has how close it came per head. PPO starts from there with a fresh optimizer.
 
+`big1` (2026-11-12, 256x256x256) started that way from teacher1's generation 500, with teacher1's later settings
+(`--games 50 --minutes 20`): on 57,630 decisions of 240 games the new net chose teacher1's most likely choice
+99.1-99.97% of the time per head (KL 0.0001-0.0005), value error 0.04. Its greedy evaluation at generation 0, on the
+pool's evaluation maps: Hard 39-1 of 40, the teacher 24-2 with 14 draws (0.775); teacher1's own last evaluations on
+seeds 39000+ were 0.975 and 0.70. Only generation 0 has been played: go on with
+`train.py --run big1 --games 50 --minutes 20 --generations N`.
+
 ## How to run
 
 ```bash
