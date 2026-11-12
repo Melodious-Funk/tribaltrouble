@@ -5,21 +5,23 @@ import com.oddlabs.tt.player.Player;
 import org.jspecify.annotations.NonNull;
 
 /**
- * What the policy is given each decision: the numbers of {@link Sight}, scaled to about 0..1, and the action it chose
- * last. The trainer reads the size from the trajectory files; changing the list here means training a new net.
+ * What the policy is given each decision: the numbers of {@link Sight}, scaled to about 0..1, the choices in force
+ * and, last, the choices {@link Teacher} advises, each as one 1 per head. The trainer reads the size from the
+ * trajectory files; changing the list here means training a new net.
  */
 final class Observation {
-    /** The numbers of {@link #of} before the last action's one-hot code. */
-    private static final int NUMBERS = 60;
-    static final int SIZE = NUMBERS + Heads.LOGITS;
+    /** The numbers of {@link #of} before the codes of the choices. */
+    private static final int NUMBERS = 66;
+    /** The advice is the last {@link Heads#LOGITS} numbers: the trainer's net adds the prior there, as the AI does. */
+    static final int SIZE = NUMBERS + 2 * Heads.LOGITS;
     /** The numbers of {@link #outcome}. */
-    static final int OUTCOME_SIZE = 8;
+    static final int OUTCOME_SIZE = 10;
 
     private Observation() {
     }
 
-    static float @NonNull [] of(@NonNull Player me, @NonNull Sight see, int @NonNull [] last_action, boolean pending,
-            int max_units, int max_buildings) {
+    static float @NonNull [] of(@NonNull Player me, @NonNull Sight see, int @NonNull [] plan, int @NonNull [] advice,
+            int @NonNull [] gather_targets, boolean pending, int max_units, int max_buildings) {
         float[] o = new float[SIZE];
         int i = 0;
         float map_cells = me.getWorld().getHeightMap().getGridUnitsPerWorld();
@@ -31,7 +33,12 @@ final class Observation {
         for (int gatherers : see.gatherers) {
             o[i++] = gatherers / 30f;
         }
+        for (int target : gather_targets) {
+            o[i++] = target / 30f;
+        }
         o[i++] = see.in_quarters / 100f;
+        o[i++] = see.in_quarters / (30f * Math.max(1, see.quarters.size()));
+        o[i++] = (float) see.peons() / max_units;
         o[i++] = see.in_armories / 100f;
         for (int warriors : see.warrior_kinds) {
             o[i++] = warriors / 100f;
@@ -88,18 +95,18 @@ final class Observation {
             throw new IllegalStateException("the observation has " + i + " numbers, not " + NUMBERS);
         }
         for (int head = 0; head < Heads.COUNT; head++) {
-            if (last_action[head] >= 0) {
-                o[NUMBERS + Heads.offset(head) + last_action[head]] = 1f;
-            }
+            o[NUMBERS + Heads.offset(head) + plan[head]] = 1f;
+            o[NUMBERS + Heads.LOGITS + Heads.offset(head) + advice[head]] = 1f;
         }
         return o;
     }
 
     /**
-     * The plain counts the trainer shapes its reward from: own units, warriors, buildings and kills, then the
-     * enemies' (their kills are the units this player lost to them).
+     * The plain counts the trainer makes its reward from: own units, warriors, buildings and kills, then the
+     * enemies' (their kills are the units this player lost to them), then the buildings this player destroyed and
+     * lost.
      */
     static float @NonNull [] outcome(@NonNull Player me, @NonNull Sight see) {
-        return new float[]{see.units, see.warriors() + see.garrison, see.quarters.size() + see.armories.size() + see.towers.size(), me.getUnitsKilled(), see.enemy_units, see.enemyWarriors(), see.enemy_quarters + see.enemy_armories + see.enemy_towers, see.enemy_kills};
+        return new float[]{see.units, see.warriors() + see.garrison, see.quarters.size() + see.armories.size() + see.towers.size(), me.getUnitsKilled(), see.enemy_units, see.enemyWarriors(), see.enemy_quarters + see.enemy_armories + see.enemy_towers, see.enemy_kills, me.getBuildingsDestroyed(), me.getBuildingsLost()};
     }
 }

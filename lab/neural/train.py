@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Trains the neural AI by self-play, generation after generation.
 
-A generation: export the current net, play batches of harness games with it (against itself, against earlier nets
-of this run, against the stock AIs), read the trajectories the AI wrote, and improve the net with PPO. Every game is
-1 vs 1 on `--size medium --terrain tropical --hills 0 --trees 10 --supplies 10`.
+A generation: export the current net, play batches of harness games with it (against itself, against the scripted
+teacher it starts from, against earlier nets of this run, against a stock AI), read the trajectories the AI wrote,
+and improve the net with PPO. Every game is 1 vs 1 on `--size medium --terrain tropical --hills 0 --trees 10
+--supplies 10`.
+
+The net does not start from nothing: the AI adds `--prior` to the logit of every choice its scripted teacher advises
+(Teacher.java), so generation 0 plays the teacher's plan with a little noise. The reward is made for decided games:
+a game that reaches the time limit counts as `--timeout-result` for both sides (a loss by default), a win counts more
+the earlier it comes, and kills and razed buildings pay on the way.
 
     python lab/neural/train.py --run first --generations 200
 
@@ -38,12 +44,26 @@ STOCK = ["easy", "normal", "hard"]
 # Training maps are seeds 0..TRAIN_SEEDS-1; evaluation uses the seeds from EVAL_SEED on, which training never plays.
 TRAIN_SEEDS = 38000
 EVAL_SEED = 39000
-# The sizes of the AI of this build; a first trajectory confirms them.
-OBSERVATION_SIZE = 91
-HEAD_SIZES = [4, 5, 5, 4, 3, 5, 3, 2]
-# Outcome numbers (Observation.outcome): own units, warriors, buildings, kills, then the enemies'.
+# The AI of this build (Observation.java, Heads.java); every trajectory read is checked against these.
+OBSERVATION_SIZE = 136
+HEADS = [
+    ("Build", ["nothing", "quarters", "armory", "tower"]),
+    ("Peons kept in each quarters", ["1", "4", "10", "18", "30"]),
+    ("Peons kept at the forge", ["2", "6", "12", "20", "32"]),
+    ("Wood gatherers", ["2 fewer", "same", "2 more"]),
+    ("Rock gatherers", ["2 fewer", "same", "2 more"]),
+    ("Iron gatherers", ["2 fewer", "same", "2 more"]),
+    ("Rubber gatherers", ["2 fewer", "same", "2 more"]),
+    ("Weapons made", ["iron", "iron and rubber", "rubber", "all three"]),
+    ("Army", ["defend", "attack", "pull back"]),
+    ("Chieftain", ["no", "train"]),
+]
+HEAD_SIZES = [len(choices) for _, choices in HEADS]
+# Outcome numbers (Observation.outcome): own units, warriors, buildings, kills, then the enemies' (their kills are
+# our losses), then the buildings we razed and lost.
 SHAPING_SCALE = np.array([250, 100, 10, 250], dtype=np.float32)
-SHAPING_WEIGHT = np.array([0.3, 0.3, 0.3, 0.1], dtype=np.float32)
+SHAPING_WEIGHT = np.array([0.2, 0.4, 0.2, 0.2], dtype=np.float32)
+KILLS, LOSSES, RAZED, RAZED_OURS = 3, 7, 8, 9
 
 
 def parse_args():
@@ -67,12 +87,29 @@ def parse_args():
     p.add_argument("--clip", type=float, default=0.2)
     p.add_argument("--epochs", type=int, default=4, help="passes over a generation's decisions")
     p.add_argument("--minibatch", type=int, default=1024)
-    p.add_argument("--entropy", type=float, default=0.01)
+    p.add_argument("--entropy", type=float, default=0.003,
+                   help="the entropy bonus: it also pulls the policy away from the teacher's advice")
     p.add_argument("--value-coefficient", type=float, default=0.5)
-    p.add_argument("--shaping", type=float, default=0.5,
-                   help="weight of the shaped reward (the change of the strength margin) next to winning")
-    p.add_argument("--self-share", type=float, default=0.4, help="share of a generation played against itself")
-    p.add_argument("--stock-share", type=float, default=0.2, help="share played against the stock AIs")
+    p.add_argument("--prior", type=float, default=4.5,
+                   help="what a new net adds to the logit of each choice the scripted teacher advises (0: no teacher)")
+    p.add_argument("--timeout-result", type=float, default=-1.0,
+                   help="what a game that reaches the time limit counts as, for both sides (a loss is -1, a win 1)")
+    p.add_argument("--win-speed", type=float, default=0.5,
+                   help="what a win at the first second adds to its 1; a win at the time limit adds nothing")
+    p.add_argument("--kill-reward", type=float, default=0.002, help="reward per enemy unit killed")
+    p.add_argument("--loss-penalty", type=float, default=0.001, help="penalty per unit lost: below --kill-reward, so "
+                   "an even fight pays")
+    p.add_argument("--raze-reward", type=float, default=0.05, help="reward per enemy building destroyed")
+    p.add_argument("--razed-penalty", type=float, default=0.03, help="penalty per building lost")
+    p.add_argument("--shaping", type=float, default=0.2,
+                   help="weight of the shaped reward (the change of the strength margin), which sums to nothing over "
+                        "a game")
+    p.add_argument("--self-share", type=float, default=0.3, help="share of a generation played against itself")
+    p.add_argument("--teacher-share", type=float, default=0.2,
+                   help="share played against the scripted teacher alone (the plan the net starts from)")
+    p.add_argument("--stock-share", type=float, default=0.2, help="share played against a stock AI")
+    p.add_argument("--stock", default="hard", choices=[*STOCK, "auto"],
+                   help="the stock AI of the training games; auto: the easiest one not yet beaten 9 times in 10")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=1)
     return p.parse_args()
@@ -89,13 +126,16 @@ class Trainer:
         self.league = []  # {"generation", "games", "wins"}: past nets, and how the current one did against each
         self.stock_score = {name: 0.0 for name in STOCK}  # running score against each stock AI
         hidden = tuple(int(n) for n in args.hidden.split(","))
-        self.policy = Policy(OBSERVATION_SIZE, HEAD_SIZES, hidden).to(self.device)
+        self.policy = Policy(OBSERVATION_SIZE, HEAD_SIZES, hidden, args.prior).to(self.device)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=args.lr, eps=1e-5)
         self.random = random.Random(args.seed)
         checkpoint = self.dir / "latest.pt"
         if checkpoint.exists():
             state = torch.load(checkpoint, map_location=self.device, weights_only=False)
-            self.policy = Policy(OBSERVATION_SIZE, HEAD_SIZES, tuple(state["hidden"])).to(self.device)
+            if state.get("observation_size") != OBSERVATION_SIZE or state.get("head_sizes") != HEAD_SIZES:
+                sys.exit(f"{args.run} was trained for another build of the AI (its observation or heads differ): "
+                         "start a run under a new name")
+            self.policy = Policy(OBSERVATION_SIZE, HEAD_SIZES, tuple(state["hidden"]), state["prior"]).to(self.device)
             self.policy.load_state_dict(state["policy"])
             self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=args.lr, eps=1e-5)
             self.optimizer.load_state_dict(state["optimizer"])
@@ -106,7 +146,9 @@ class Trainer:
             print(f"resuming {args.run} at generation {self.generation}")
         self.session_start = time.time()
         self.session_first = self.generation
-        (self.dir / "args.json").write_text(json.dumps(vars(args), indent=1))
+        described = {**vars(args), "prior": self.policy.prior,
+                     "heads": [{"name": name, "choices": choices} for name, choices in HEADS]}
+        (self.dir / "args.json").write_text(json.dumps(described, indent=1))
 
     def status(self, phase: str, **more) -> None:
         """Writes what the trainer does now, for the dashboard: the phase, and the batch it waits for."""
@@ -150,18 +192,24 @@ class Trainer:
     def lineups(self, trajectories: Path) -> list[tuple[str, str, int]]:
         """This generation's batches: (kind, --players, maps)."""
         g = self.generation
-        maps = max(3, self.args.games // 2)
+        maps = max(4, self.args.games // 2)
+        stock_maps = round(maps * self.args.stock_share)
+        teacher_maps = round(maps * self.args.teacher_share)
         self_maps = max(1, round(maps * self.args.self_share))
-        stock_maps = max(1, round(maps * self.args.stock_share))
-        past_maps = maps - self_maps - stock_maps if self.league else 0
+        past_maps = max(0, maps - self_maps - stock_maps - teacher_maps) if self.league else 0
         if not self.league:
-            self_maps = maps - stock_maps
+            self_maps = max(1, maps - stock_maps - teacher_maps)
         me = self.spec(g, trajectories, g)
         lineups = [("self", f"{me} vs {self.spec(g, trajectories, g + 500_000)}", self_maps)]
-        # the stock AI it does worst against that it has not yet mastered, else the hardest
-        open_stock = [name for name in STOCK if self.stock_score[name] < 0.9]
-        stock = open_stock[0] if open_stock else STOCK[-1]
-        lineups.append((stock, f"{me} vs {stock}", stock_maps))
+        if teacher_maps > 0:
+            # no net and the most likely choice: the teacher's advice and nothing else
+            lineups.append(("teacher", f"{me} vs neural:greedy=1", teacher_maps))
+        if stock_maps > 0:
+            stock = self.args.stock
+            if stock == "auto":
+                open_stock = [name for name in STOCK if self.stock_score[name] < 0.9]
+                stock = open_stock[0] if open_stock else STOCK[-1]
+            lineups.append((stock, f"{me} vs {stock}", stock_maps))
         if past_maps > 0:
             # earlier nets it still loses to are met more often
             weights = [(1 - entry["wins"] / max(1, entry["games"])) ** 2 + 0.05 for entry in self.league]
@@ -203,13 +251,30 @@ class Trainer:
                         file = trajectories / f"{row['key']}-s{slot}.traj"
                         trajectory = read_trajectory(file) if file.exists() else None
                         if trajectory is not None:
-                            # 1 for first place alone, -1 for last, 0 for a shared place (a draw at the time limit)
-                            trajectory["result"] = 2 * team["score"] - 1
+                            self.check(trajectory, file)
+                            trajectory["result"] = self.result(row, team)
                             trajectory["length"] = row["t"]
+                            trajectory["kind"] = kind
                             games.append(trajectory)
             self.note(kind, counted)
         shutil.rmtree(trajectories, ignore_errors=True)
         return games, scores, results
+
+    @staticmethod
+    def check(trajectory: dict, file: Path) -> None:
+        if trajectory["head_sizes"] != HEAD_SIZES or trajectory["observation"].shape[1] != OBSERVATION_SIZE:
+            sys.exit(f"{file} is from another build of the AI: {trajectory['observation'].shape[1]} observations and "
+                     f"heads {trajectory['head_sizes']}, train.py expects {OBSERVATION_SIZE} and {HEAD_SIZES}")
+
+    def result(self, row: dict, team: dict) -> float:
+        """What the game counts as for `team`: about 1 for a win, -1 for a loss, and the time limit as set."""
+        if row.get("end") == "timeout":
+            return self.args.timeout_result  # whoever was ahead: nobody finished it
+        result = 2 * team["score"] - 1  # 1 for first place alone, -1 for last, 0 for a shared one
+        if result > 0:
+            limit = 60.0 * self.args.minutes
+            result += self.args.win_speed * max(0.0, 1.0 - row["t"] / limit)
+        return result
 
     def note(self, kind: str, rows: list[dict]) -> None:
         """Keeps the running scores that choose later opponents."""
@@ -233,10 +298,15 @@ class Trainer:
                 value = self.policy(observation)[1].cpu().numpy()
                 outcome = game["outcome"]
                 # the strength margin: own minus enemy units, warriors, buildings and kills, scaled
-                margin = ((outcome[:, :4] - outcome[:, 4:]) / SHAPING_SCALE * SHAPING_WEIGHT).sum(1)
+                margin = ((outcome[:, :4] - outcome[:, 4:8]) / SHAPING_SCALE * SHAPING_WEIGHT).sum(1)
                 steps = len(value)
                 reward = np.zeros(steps, dtype=np.float32)
                 reward[:-1] = args.shaping * (args.gamma * margin[1:] - margin[:-1])
+                # damage pays where it is done and is never taken back: what happened until the next decision
+                damage = (args.kill_reward * outcome[:, KILLS] - args.loss_penalty * outcome[:, LOSSES]
+                          + args.raze_reward * outcome[:, RAZED] - args.razed_penalty * outcome[:, RAZED_OURS])
+                reward[:-1] += damage[1:] - damage[:-1]
+                game["damage"] = float(damage[-1] - damage[0])
                 reward[-1] = game["result"] - args.shaping * margin[-1]  # the game ends: the margin is spent
                 advantage = np.zeros(steps, dtype=np.float32)
                 next_value, running = 0.0, 0.0  # nothing after the last decision
@@ -290,12 +360,13 @@ class Trainer:
         return stats
 
     def evaluate(self) -> tuple[dict, dict]:
-        """The current net, choosing greedily, against each stock AI on maps training never plays."""
+        """The current net, choosing greedily, against each stock AI and the teacher on maps training never plays."""
         scores = {}
         results = {}
         maps = max(1, self.args.eval_games // 2)
-        for name in STOCK:
-            players = f"{self.spec(self.generation, None, 0, greedy=True)} vs {name}"
+        for name in [*STOCK, "teacher"]:
+            opponent = "neural:greedy=1" if name == "teacher" else name
+            players = f"{self.spec(self.generation, None, 0, greedy=True)} vs {opponent}"
             rows = self.batch(f"{self.args.run}-eval-{name}", players, EVAL_SEED, maps, False, 40)
             counted = [row for row in rows if row.get("result") is not None]
             scores[name] = round(sum(row["score"] for row in counted) / max(1, len(counted)), 3)
@@ -304,7 +375,8 @@ class Trainer:
 
     def save(self) -> None:
         state = {"policy": self.policy.state_dict(), "optimizer": self.optimizer.state_dict(),
-                 "hidden": [layer.out_features for layer in self.policy.hidden], "generation": self.generation,
+                 "hidden": [layer.out_features for layer in self.policy.hidden], "prior": self.policy.prior,
+                 "observation_size": OBSERVATION_SIZE, "head_sizes": HEAD_SIZES, "generation": self.generation,
                  "league": self.league, "stock_score": self.stock_score, "random": self.random.getstate()}
         temporary = self.dir / "latest.tmp"
         torch.save(state, temporary)
@@ -337,7 +409,7 @@ class Trainer:
                 line["buildings"] = round(float(last[:, 2].mean()), 1)
                 line["lost"] = round(float(last[:, 7].mean()), 1)
                 # the strength margin the shaped reward follows, at the last decision
-                margin = ((last[:, :4] - last[:, 4:]) / SHAPING_SCALE * SHAPING_WEIGHT).sum(1)
+                margin = ((last[:, :4] - last[:, 4:8]) / SHAPING_SCALE * SHAPING_WEIGHT).sum(1)
                 line["margin"] = round(float(margin.mean()), 4)
                 # how often each choice of each head was taken, and how well the value net foresaw the returns
                 actions = data["action"].cpu().numpy()
@@ -347,6 +419,17 @@ class Trainer:
                 target_variance = data["target"].var().item()
                 line["explained_variance"] = round(1 - data["advantage"].var().item() / target_variance, 4) \
                     if target_variance > 0 else 0.0
+                # how often each head chose what the teacher advised (the advice is the observation's last numbers)
+                advice = data["observation"][:, -sum(HEAD_SIZES):].cpu().numpy()
+                offsets = np.cumsum([0, *HEAD_SIZES[:-1]])
+                line["follows"] = [round(float(advice[np.arange(len(actions)), offset + actions[:, head]].mean()), 4)
+                                   for head, offset in enumerate(offsets)]
+                # what the games counted as, and the damage reward in them, on average
+                line["result_mean"] = round(float(np.mean([game["result"] for game in games])), 4)
+                line["damage_mean"] = round(float(np.mean([game["damage"] for game in games])), 4)
+                counted = [tally for tally in results.values()]
+                total = sum(tally["games"] for tally in counted)
+                line["decided"] = round(1 - sum(tally["timeouts"] for tally in counted) / max(1, total), 4)
                 line.update(self.improve(data))
             if args.eval_generations > 0 and g % args.eval_generations == 0:
                 line["eval"], line["eval_results"] = self.evaluate()
