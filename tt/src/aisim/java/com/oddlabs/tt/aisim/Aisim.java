@@ -24,6 +24,7 @@ import com.oddlabs.tt.aisim.play.Batch;
 import com.oddlabs.tt.aisim.play.Job;
 import com.oddlabs.tt.aisim.play.Pace;
 import com.oddlabs.tt.aisim.play.Replay;
+import com.oddlabs.tt.aisim.play.Serve;
 import com.oddlabs.tt.aisim.play.WorkerMain;
 import com.oddlabs.tt.aisim.watch.WatchCommand;
 import org.jspecify.annotations.NonNull;
@@ -80,6 +81,10 @@ public final class Aisim {
                                                  AI logs of every game (lost: of the games team A did not win);
                                                  --profile records where the CPU goes, for profile;
                                                  --record-every N writes the game file of every Nth game only
+              serve   [WORKERS] [--games-per-worker N]
+                                                 batch requests from stdin, one JSON line each ({"id": ID, "args": [batch
+                                                 options]}), on one pool of workers that outlives them; answers each
+                                                 with an @@ line on stdout once its run is played (docs/aisim.md)
               summary RUN                        results of a (running) run
               compare BASE VARIANT [VARIANT...] [--force]
                                                  paired comparison over the same games; several variants: one table
@@ -190,6 +195,9 @@ public final class Aisim {
             case "batch" -> {
                 return batch(options);
             }
+            case "serve" -> {
+                return serve(options);
+            }
             case "summary" -> {
                 options.check(Set.of(), 1);
                 return Summary.run(args.get(0));
@@ -279,20 +287,58 @@ public final class Aisim {
      * [MAP] [GAME]
      */
     private static int batch(@NonNull Options options) throws IOException {
+        BatchRun run = batchRun(options, true);
+        return Batch.run(run.name(), run.setup(), run.jobs(), run.limits(), options.flag("profile"));
+    }
+
+    /** A batch's run, as batch and serve prepare it: its name, setup, jobs and worker limits. */
+    public record BatchRun(@NonNull String name, Batch.@NonNull Setup setup, @NonNull List<Job> jobs,
+                           Pace.@NonNull Limits limits) {
+    }
+
+    /** The run of batch's {@code options}; {@code check_fresh}: refuse sources newer than the last build. */
+    private static @NonNull BatchRun batchRun(@NonNull Options options, boolean check_fresh) throws IOException {
         if (options.get("players") == null) {
             throw new UsageException("batch needs its players, such as --players \"myai vs hard\"");
         }
         Lineup lineup = lineup(options, "hard vs hard");
         options.check(union(GAME_OPTIONS, "seeds", "side", "workers", "cpus", "memory", "logs", "name", "profile",
                 "record-every"), 0);
-        Snapshot.requireFresh(options.flag("stale-ok"));
+        if (check_fresh) {
+            Snapshot.requireFresh(options.flag("stale-ok"));
+        }
         String name = runName(options, "", lineup);
         Pace.Limits workers = Pace.Limits.parse(options.get("workers"), options.get("cpus"), options.get("memory"));
         Integer side = options.optionalInteger("side", 0, lineup.size() - 1);
         Maps maps = Maps.of(options, true);
         printRandomSeeds(maps, "--seeds");
         Run run = run(name, options, lineup, maps, side, logs(options.get("logs")));
-        return Batch.run(name, run.setup(), run.jobs(), workers, options.flag("profile"));
+        return new BatchRun(name, run.setup(), run.jobs(), workers);
+    }
+
+    /**
+     * serve [WORKERS] [--games-per-worker N] [--stale-ok]: batch requests from stdin, on one pool of workers
+     * ({@link Serve}). A request takes
+     * batch's options but the workers', --profile and --stale-ok, which belong to the pool.
+     */
+    private static int serve(@NonNull Options options) throws IOException {
+        options.check(Set.of("workers", "cpus", "memory", "games-per-worker", "stale-ok"), 0);
+        Snapshot.requireFresh(options.flag("stale-ok"));
+        Pace.Limits limits = Pace.Limits.parse(options.get("workers"), options.get("cpus"), options.get("memory"));
+        int games_per_worker = options.integer("games-per-worker", Serve.GAMES_PER_WORKER, 1, MAX_RECORD_EVERY);
+        return Serve.run(limits, games_per_worker, args -> {
+            Options request = new Options(args, 0);
+            for (String pool : List.of("workers", "cpus", "memory", "profile", "stale-ok")) {
+                if (request.get(pool) != null) {
+                    throw new UsageException("--" + pool + " is serve's, not a request's");
+                }
+            }
+            try {
+                return batchRun(request, false);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
     }
 
     /** batch --logs: null without it, all for --logs, lost for --logs lost. */

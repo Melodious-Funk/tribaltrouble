@@ -13,6 +13,12 @@ the earlier it comes, and kills and razed buildings pay on the way.
 
     python lab/neural/train.py --run first --generations 200
 
+Games are played by one `./aisim.sh serve` for the whole session, whose worker JVMs stay warm from generation to
+generation, and a generation's batches are sent together, so they share the workers rather than wait for one another.
+Training maps come from the fixed pool of fair maps in lab/neural/maps.json (lab/neural/fairmaps.py chose them), and
+evaluation plays its held-out maps. A new run can start from an earlier run's net of another size (`--init-from`):
+the new net first learns to choose as that net does, on games that net plays.
+
 Run it from the repository root, after `./aisim.sh build`, with AISIM_JDK pointing at a JDK 26. State is kept under
 aisim/neural/RUN/ (git-ignored): `latest.pt` to resume from, `nets/` the exported nets, `log.jsonl` a line per
 generation, `status.json` what it is doing now and `args.json` its settings. Stop it with Ctrl+C or by creating
@@ -72,15 +78,24 @@ def parse_args():
     p.add_argument("--generations", type=int, default=100, help="generations to play in this session")
     p.add_argument("--games", type=int, default=120, help="games per generation (two per map: both starts)")
     p.add_argument("--minutes", type=int, default=30, help="the time limit of a training game, in game minutes")
-    p.add_argument("--workers", default="auto", help="the harness's --workers")
+    p.add_argument("--workers", default="auto", help="serve's --workers: the pool of worker JVMs")
+    p.add_argument("--java-opts", default="", help="extra JVM options of the workers (AISIM_JAVA_OPTS)")
+    p.add_argument("--maps", type=Path, default=ROOT / "lab" / "neural" / "maps.json",
+                   help="the pool of maps (fairmaps.py): training plays its train maps, evaluation its eval maps; "
+                        "without the file, training plays any seed below 38000 and evaluation seeds from 39000")
     p.add_argument("--record-generations", type=int, default=100,
                    help="keep the run folders and full game recordings of every Nth generation only")
     p.add_argument("--snapshot-generations", type=int, default=10,
                    help="every Nth generation's net joins the league of past opponents")
     p.add_argument("--eval-generations", type=int, default=10,
                    help="every Nth generation, measure the net (choosing greedily) against the stock AIs")
-    p.add_argument("--eval-games", type=int, default=20, help="games per stock AI in an evaluation")
-    p.add_argument("--hidden", default="128,128", help="hidden layer sizes of a new net")
+    p.add_argument("--eval-games", type=int, default=40,
+                   help="games per opponent in an evaluation (two per map, at most two per eval map of the pool)")
+    p.add_argument("--hidden", default="256,256,256", help="hidden layer sizes of a new net")
+    p.add_argument("--init-from", default=None,
+                   help="a new run only: an earlier run whose net (its latest.pt) the new one first learns to imitate")
+    p.add_argument("--init-games", type=int, default=240, help="games that net plays for --init-from")
+    p.add_argument("--init-epochs", type=int, default=40, help="passes over those decisions")
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.997, help="discount per decision (5 game seconds)")
     p.add_argument("--gae-lambda", type=float, default=0.95)
@@ -117,6 +132,71 @@ def parse_args():
     return p.parse_args()
 
 
+def read_maps(file: Path) -> tuple[list[int], list[int]]:
+    """The training and evaluation maps of the pool file; none without the file."""
+    if not file.exists():
+        print(f"note: no map pool {file}: training plays any seed below {TRAIN_SEEDS}")
+        return [], []
+    pool = json.loads(file.read_text())
+    if set(pool["train"]) & set(pool["eval"]):
+        sys.exit(f"{file}: a map is both a training and an evaluation map")
+    return list(pool["train"]), list(pool["eval"])
+
+
+class Harness:
+    """One `./aisim.sh serve` for the session: its worker JVMs stay warm from batch to batch."""
+
+    def __init__(self, workers: str, java_opts: str, log: Path):
+        env = dict(os.environ)
+        if java_opts:
+            env["AISIM_JAVA_OPTS"] = java_opts
+        self.log = log
+        self.log_file = open(log, "a")
+        self.process = subprocess.Popen(["bash", str(ROOT / "aisim.sh"), "serve", "--workers", workers], cwd=ROOT,
+                                        env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log_file,
+                                        text=True)
+        self.next_id = 0
+
+    def play(self, requests: list[tuple[str, list[str]]]) -> None:
+        """Sends batch requests (name, options) at once and returns when every one is played."""
+        waiting = {}
+        for name, options in requests:
+            self.next_id += 1
+            waiting[str(self.next_id)] = name
+            self.process.stdin.write(json.dumps({"id": str(self.next_id), "args": options}) + "\n")
+        self.process.stdin.flush()
+        while waiting:
+            line = self.process.stdout.readline()
+            if not line:
+                tail = self.log.read_text()[-3000:] if self.log.exists() else ""
+                raise RuntimeError(f"aisim serve ended (exit {self.process.poll()}); its log {self.log} ends:\n{tail}")
+            if not line.startswith("@@"):
+                continue  # the JVM's own messages
+            answer = json.loads(line[2:])
+            name = waiting.pop(answer["id"], None)
+            if "error" in answer:
+                raise RuntimeError(f"aisim serve refused {name}: {answer['error']}")
+
+    def close(self) -> None:
+        """Lets serve end after what it plays; kills it if it does not end within a minute."""
+        try:
+            self.process.stdin.close()
+            self.process.wait(60)
+        except (OSError, subprocess.TimeoutExpired):
+            self.process.kill()
+        self.log_file.close()
+
+    def kill(self) -> None:
+        """Stops serve at once; its workers die with it."""
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(30)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+        self.log_file.close()
+
+
 class Trainer:
     def __init__(self, args):
         self.args = args
@@ -146,11 +226,13 @@ class Trainer:
             self.stock_score = state["stock_score"]
             self.random.setstate(state["random"])
             print(f"resuming {args.run} at generation {self.generation}")
+        self.train_maps, self.eval_maps = read_maps(args.maps)
         self.session_start = time.time()
         self.session_first = self.generation
         described = {**vars(args), "prior": self.policy.prior,
                      "heads": [{"name": name, "choices": choices} for name, choices in HEADS]}
-        (self.dir / "args.json").write_text(json.dumps(described, indent=1))
+        (self.dir / "args.json").write_text(json.dumps(described, indent=1, default=str))
+        self.harness = Harness(args.workers, args.java_opts, self.dir / "serve.log")  # last: nothing fails after it
 
     def status(self, phase: str, **more) -> None:
         """Writes what the trainer does now, for the dashboard: the phase, and the batch it waits for."""
@@ -166,30 +248,44 @@ class Trainer:
     def net_file(self, generation: int) -> Path:
         return self.nets / f"g{generation:06d}.bin"
 
-    def spec(self, generation: int, trajectories: Path | None, seed: int, greedy: bool = False) -> str:
-        params = [f"net={self.net_file(generation).relative_to(ROOT).as_posix()}", f"seed={seed}"]
+    def spec(self, generation: int | Path, trajectories: Path | None, seed: int, greedy: bool = False) -> str:
+        net = generation if isinstance(generation, Path) else self.net_file(generation)
+        params = [f"net={net.relative_to(ROOT).as_posix()}", f"seed={seed}"]
         if trajectories is not None:
             params.append(f"traj={trajectories.relative_to(ROOT).as_posix()}")
         if greedy:
             params.append("greedy=1")
         return "neural:" + ",".join(params)
 
-    def batch(self, name: str, players: str, first_seed: int, maps: int, record: bool, minutes: int) -> list[dict]:
-        """Plays `maps` maps from both starts and returns the result rows."""
-        run_dir = ROOT / "aisim" / "runs" / name
-        shutil.rmtree(run_dir, ignore_errors=True)
-        self.status("evaluating" if "-eval-" in name else "playing", batch=name, games=2 * maps, players=players)
-        command = ["bash", str(ROOT / "aisim.sh"), "batch", "--name", name, "--players", players, "--seeds",
-                   f"{first_seed}..{first_seed + maps - 1}", "--rng", str(self.generation), "--minutes", str(minutes),
-                   "--workers", self.args.workers, "--record-every", "1" if record else "1000000", *MAP]
-        done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
-        results = run_dir / "results.jsonl"
-        if not results.exists():
-            raise RuntimeError(f"the harness played nothing for {name}:\n{done.stdout[-2000:]}\n{done.stderr[-2000:]}")
-        rows = [json.loads(line) for line in results.read_text().splitlines()]
-        if not record:
-            shutil.rmtree(run_dir, ignore_errors=True)
+    def batches(self, batches: list[tuple[str, str, list[int]]], record: bool, minutes: int) -> dict[str, list[dict]]:
+        """Plays the batches (name, --players, maps) at once, each map from both starts; returns their result rows."""
+        requests = []
+        for name, players, seeds in batches:
+            shutil.rmtree(ROOT / "aisim" / "runs" / name, ignore_errors=True)
+            requests.append((name, ["--name", name, "--players", players, "--seeds", ",".join(map(str, seeds)),
+                                    "--rng", str(self.generation), "--minutes", str(minutes),
+                                    "--record-every", "1" if record else "1000000", *MAP]))
+        evaluating = any("-eval-" in name for name, _, _ in batches)
+        self.status("evaluating" if evaluating else "playing", batches=[name for name, _, _ in batches],
+                    games=sum(2 * len(seeds) for _, _, seeds in batches), players=batches[0][1])
+        self.harness.play(requests)
+        rows = {}
+        for name, _, _ in batches:
+            run_dir = ROOT / "aisim" / "runs" / name
+            results = run_dir / "results.jsonl"
+            if not results.exists():
+                raise RuntimeError(f"the harness played nothing for {name}: see {self.dir / 'serve.log'}")
+            rows[name] = [json.loads(line) for line in results.read_text().splitlines()]
+            if not record:
+                shutil.rmtree(run_dir, ignore_errors=True)
         return rows
+
+    def training_maps(self, count: int) -> list[int]:
+        """`count` different training maps, at random: from the pool, or any seed below TRAIN_SEEDS without one."""
+        if self.train_maps:
+            return sorted(self.random.sample(self.train_maps, min(count, len(self.train_maps))))
+        first = self.random.randrange(TRAIN_SEEDS - count)
+        return list(range(first, first + count))
 
     def lineups(self, trajectories: Path) -> list[tuple[str, str, int]]:
         """This generation's batches: (kind, --players, maps)."""
@@ -239,10 +335,12 @@ class Trainer:
         games = []
         scores = {}
         results = {}
-        first_seed = self.random.randrange(TRAIN_SEEDS - 400)
-        for kind, players, maps in self.lineups(trajectories):
-            rows = self.batch(f"{self.args.run}-g{g:06d}-{kind}", players, first_seed, maps, record, self.args.minutes)
-            first_seed += maps
+        lineups = [(kind, f"{self.args.run}-g{g:06d}-{kind}", players, self.training_maps(maps))
+                   for kind, players, maps in self.lineups(trajectories)]
+        played = self.batches([(name, players, seeds) for _, name, players, seeds in lineups], record,
+                              self.args.minutes)
+        for kind, name, _, _ in lineups:
+            rows = played[name]
             counted = [row for row in rows if row.get("result") is not None]
             if counted:
                 scores[kind] = sum(row["score"] for row in counted) / len(counted)
@@ -367,11 +465,14 @@ class Trainer:
         scores = {}
         results = {}
         maps = max(1, self.args.eval_games // 2)
+        seeds = self.eval_maps[:maps] if self.eval_maps else list(range(EVAL_SEED, EVAL_SEED + maps))
         stock = [name for name in self.args.eval_stock.split(",") if name]
+        me = self.spec(self.generation, None, 0, greedy=True)
+        batches = [(f"{self.args.run}-eval-{name}", f"{me} vs {'neural:greedy=1' if name == 'teacher' else name}",
+                    seeds) for name in [*stock, "teacher"]]
+        played = self.batches(batches, False, self.args.minutes)
         for name in [*stock, "teacher"]:
-            opponent = "neural:greedy=1" if name == "teacher" else name
-            players = f"{self.spec(self.generation, None, 0, greedy=True)} vs {opponent}"
-            rows = self.batch(f"{self.args.run}-eval-{name}", players, EVAL_SEED, maps, False, self.args.minutes)
+            rows = played[f"{self.args.run}-eval-{name}"]
             counted = [row for row in rows if row.get("result") is not None]
             scores[name] = round(sum(row["score"] for row in counted) / max(1, len(counted)), 3)
             results[name] = self.tally(counted)
@@ -386,8 +487,82 @@ class Trainer:
         torch.save(state, temporary)
         temporary.replace(self.dir / "latest.pt")
 
+    def initialize(self, source_run: str) -> None:
+        """Teaches the new net to choose as `source_run`'s net does (its policy and value), on games that net plays."""
+        args = self.args
+        state = torch.load(ROOT / "aisim" / "neural" / source_run / "latest.pt", map_location=self.device,
+                           weights_only=False)
+        if state.get("observation_size") != OBSERVATION_SIZE or state.get("head_sizes") != HEAD_SIZES:
+            sys.exit(f"--init-from {source_run}: its net is for another build of the AI")
+        source = Policy(OBSERVATION_SIZE, HEAD_SIZES, tuple(state["hidden"]), state["prior"]).to(self.device)
+        source.load_state_dict(state["policy"])
+        source.eval()
+        net = self.nets / "init.bin"
+        source.export(net)
+        trajectories = self.dir / "traj" / "init"
+        shutil.rmtree(trajectories, ignore_errors=True)
+        trajectories.mkdir(parents=True)
+        maps = max(4, args.init_games // 2)
+        me = self.spec(net, trajectories, 1)
+        kinds = [("self", f"{me} vs {self.spec(net, trajectories, 500_001)}", maps // 2),
+                 ("hard", f"{me} vs hard", maps // 4), ("teacher", f"{me} vs neural:greedy=1", maps - maps // 2 - maps // 4)]
+        batches = [(f"{args.run}-init-{kind}", players, self.training_maps(count)) for kind, players, count in kinds]
+        print(f"--init-from {source_run}: its net plays {2 * maps} games")
+        self.batches(batches, False, args.minutes)
+        games = [read_trajectory(file) for file in sorted(trajectories.glob("*.traj"))]
+        games = [game for game in games if game is not None]
+        shutil.rmtree(trajectories, ignore_errors=True)
+        observation = torch.from_numpy(np.concatenate([game["observation"] for game in games])).to(self.device)
+        allowed = torch.from_numpy(np.concatenate([game["allowed"] for game in games])).to(self.device)
+        with torch.no_grad():
+            source_logits, source_value = source(observation)
+            target = [torch.log_softmax(part, -1) for part in self.head_logits(source_logits, allowed)]
+        self.status("initializing")
+        optimizer = torch.optim.Adam(self.policy.parameters(), lr=1e-3)
+        count = observation.shape[0]
+        for epoch in range(args.init_epochs):
+            order = torch.randperm(count, device=self.device)
+            for start in range(0, count, args.minibatch):
+                rows = order[start:start + args.minibatch]
+                logits, value = self.policy(observation[rows])
+                kl = sum((part.exp() * (part - mine)).sum(-1).mean() for part, mine in
+                         zip((t[rows] for t in target), (torch.log_softmax(h, -1) for h in
+                                                          self.head_logits(logits, allowed[rows]))))
+                loss = kl + 0.5 * (value - source_value[rows]).pow(2).mean()
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
+                optimizer.step()
+        with torch.no_grad():
+            logits, value = self.policy(observation)
+            mine = [torch.log_softmax(part, -1) for part in self.head_logits(logits, allowed)]
+            kl = [float((t.exp() * (t - m)).sum(-1).mean()) for t, m in zip(target, mine)]
+            agree = [float((t.argmax(-1) == m.argmax(-1)).float().mean()) for t, m in zip(target, mine)]
+            value_error = float((value - source_value).pow(2).mean().sqrt())
+        report = {"from": source_run, "source_generation": state["generation"], "source_hidden": state["hidden"],
+                  "decisions": count, "epochs": args.init_epochs, "kl": [round(x, 5) for x in kl],
+                  "agree": [round(x, 4) for x in agree], "value_rmse": round(value_error, 4)}
+        (self.dir / "init.json").write_text(json.dumps(report, indent=1) + "\n")
+        print(f"--init-from {source_run}: {count} decisions, KL per head {report['kl']}, most likely choice the "
+              f"same {report['agree']}, value error {report['value_rmse']}")
+
+    def head_logits(self, logits: torch.Tensor, allowed: torch.Tensor) -> list[torch.Tensor]:
+        """Each head's logits, the choices it does not allow far below the rest (as Net.choose leaves them out)."""
+        parts = []
+        offset = 0
+        for size in HEAD_SIZES:
+            parts.append(logits[:, offset:offset + size].masked_fill(~allowed[:, offset:offset + size], -1e9))
+            offset += size
+        return parts
+
     def run(self) -> None:
         args = self.args
+        if args.init_from:
+            if not (self.dir / "latest.pt").exists():
+                self.initialize(args.init_from)
+                self.save()  # a run stopped in generation 0 resumes from the imitating net
+            else:
+                print(f"note: {args.run} has begun already, so --init-from is ignored")
         for _ in range(args.generations):
             if (self.dir / "STOP").exists():
                 print("STOP file found")
@@ -478,9 +653,11 @@ def main():
     trainer = Trainer(args)
     try:
         trainer.run()
+        trainer.harness.close()
     except KeyboardInterrupt:
         print(f"stopped in generation {trainer.generation}: it is played again when the run resumes")
     finally:
+        trainer.harness.kill()
         trainer.status("stopped")
 
 

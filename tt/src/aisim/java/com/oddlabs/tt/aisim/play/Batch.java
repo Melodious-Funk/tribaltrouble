@@ -45,7 +45,7 @@ public final class Batch {
      * game to game stays bounded. A fresh worker costs about a minute of CPU, mostly the JIT compiling the game again,
      * so it should be rare.
      */
-    private static final int GAMES_PER_WORKER = 100;
+    static final int GAMES_PER_WORKER = 100;
     /** Setup.logs: every game keeps its AI logs. */
     public static final String LOGS_ALL = "all";
     /** Setup.logs: only the games team A did not win keep their AI logs; the others' are deleted once recorded. */
@@ -113,7 +113,7 @@ public final class Batch {
      * Writes the run's run.json. {@code workers} is the most workers the run may have, {@code limits} what was asked
      * for, and {@code jobs} is what a replay later forwards to the run's own (possibly older) snapshot.
      */
-    private static void writeRunJson(@NonNull Path dir, @NonNull String name, @NonNull Setup setup,
+    static void writeRunJson(@NonNull Path dir, @NonNull String name, @NonNull Setup setup,
             @NonNull List<Job> jobs, int workers, Pace.@NonNull Limits limits, boolean profile,
             @NonNull String snap) throws IOException {
         Job first = jobs.get(0);
@@ -148,6 +148,16 @@ public final class Batch {
             }
         }
         return pools;
+    }
+
+    /** Deletes the AI logs a game wrote. */
+    static void deleteAiLogs(@NonNull Job job) throws IOException {
+        for (int slot = 0; slot < job.slots(); slot++) {
+            Path log = job.aiLogFile(slot);
+            if (log != null) {
+                Files.deleteIfExists(log);
+            }
+        }
     }
 
     /**
@@ -311,16 +321,6 @@ public final class Batch {
             } finally {
                 if (worker != null) {
                     worker.close();
-                }
-            }
-        }
-
-        /** Deletes the AI logs a game wrote. */
-        private static void deleteAiLogs(@NonNull Job job) throws IOException {
-            for (int slot = 0; slot < job.slots(); slot++) {
-                Path log = job.aiLogFile(slot);
-                if (log != null) {
-                    Files.deleteIfExists(log);
                 }
             }
         }

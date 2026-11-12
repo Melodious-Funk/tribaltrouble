@@ -135,6 +135,30 @@ but for team A, maps and settings, what compare pairs), and a game none of them 
 A run still cannot end before its longest game, so start the next batch while one finishes: automatic batches share
 the machine, and the new one takes the threads the old one's last games leave free.
 
+### Many short batches: serve
+
+A fresh worker JVM costs several seconds of CPU before it plays at full speed, mostly the JIT compiling the game, and
+every batch starts its own. For a few dozen short games that is most of the time a batch takes. A program that runs
+batch after batch (a trainer that plays a batch of games, learns from them, and plays the next) uses `serve`
+instead: one pool of workers ([WORKERS] as for a batch) that stays warm from batch to batch.
+
+```bash
+./aisim.sh serve --workers 6
+{"id": "1", "args": ["--name", "g1-self", "--players", "myai vs myai", "--seeds", "1..10", "--rng", "1"]}
+{"id": "2", "args": ["--name", "g1-hard", "--players", "myai vs hard", "--seeds", "11..20"]}
+```
+
+Each line on stdin is a request: an `id` of your choice and `args`, the options of a `batch` without the workers',
+`--profile` and `--stale-ok`, which are serve's. Its run is the run `batch` would write (run.json, results.jsonl,
+summary.txt, game files), played on the snapshot that was latest when serve started. Requests may come at any time
+and overlap: their games share one queue, in the order the requests came. Once a run's last game is recorded, serve
+answers on stdout with one line, `@@{"id": "1", "run": "g1-self", "games": 20, "failed": 0, "status": 0}` (status is
+the summary's exit code), or `@@{"id": "1", "error": "..."}` for a request it could not start. Everything else,
+the summaries among it, goes to stderr. At the end of stdin it plays what is queued and exits; Ctrl+C or SIGTERM ends
+it and its workers at once. A worker plays `--games-per-worker` games (1000 by default, ten times a batch's 100)
+before a fresh one takes its place. Workers log to `aisim/serve/PID/`, which is deleted at the end unless a game failed.
+`lab/neural/train.py` on the `neural` branch is a client.
+
 To take less, or a fixed amount:
 
 - `--cpus N` or `--cpus P%`: at most N hardware threads, or P% of them (a worker keeps about one busy), so other work
@@ -871,6 +895,7 @@ The same list as `./aisim.sh help`:
 ./aisim.sh play    [--players "P.. vs P.."] [--seed N|random] [--side S] [--name NAME] [--profile] [MAP] [GAME]
 ./aisim.sh batch   --players "P.. vs P.." [--seeds LIST] [--side S] [--logs [lost]] [--name NAME] [--profile]
                    [--record-every N] [WORKERS] [MAP] [GAME]
+./aisim.sh serve   [WORKERS] [--games-per-worker N]
 ./aisim.sh summary RUN
 ./aisim.sh compare BASE VARIANT [VARIANT...] [--force]
 ./aisim.sh show    RUN KEY | FILE.jsonl
