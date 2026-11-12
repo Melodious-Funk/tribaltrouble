@@ -42,7 +42,7 @@ final class Body {
     private static final int SITE_RANGE = 40;
     /** How far from the centre towards the enemy, in cells, a tower is aimed at. */
     private static final int TOWER_REACH = 14;
-    static final int MAX_QUARTERS = 8;
+    static final int MAX_QUARTERS = 3;
     static final int MAX_ARMORIES = 1;
     static final int MAX_TOWERS = 8;
     /** Peons the armory keeps whatever else is asked of it: gatherers leave it down to this. */

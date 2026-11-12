@@ -58,7 +58,7 @@ final class Teacher {
 
     Teacher(@NonNull AiParams params) {
         early_quarters = params.getInt("t_quarters", 2);
-        late_quarters = params.getInt("t_late_quarters", 6);
+        late_quarters = params.getInt("t_late_quarters", Body.MAX_QUARTERS);
         towers = params.getInt("t_towers", 2);
         quarters_keep = params.getInt("t_keep", 1);
         gather_cap = params.getDouble("t_gather_cap", 0.5);
