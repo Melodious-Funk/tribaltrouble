@@ -51,7 +51,8 @@ SETTINGS = {
 }
 TEXT_SETTINGS = {"hidden": re.compile(r"\d{1,5}(,\d{1,5}){0,7}"), "workers": re.compile(r"auto|\d{1,3}"),
                  "stock": re.compile(r"easy|normal|hard|auto"),
-                 "eval_stock": re.compile(r"(easy|normal|hard)(,(easy|normal|hard)){0,2}")}
+                 "eval_stock": re.compile(r"(easy|normal|hard)(,(easy|normal|hard)){0,2}"),
+                 "init_from": NAME}
 FILTERS = ("all", "timeout", "decided")
 
 
@@ -118,13 +119,16 @@ def status_of(folder: Path) -> dict:
     status["running"] = bool(running)
     status["now"] = now
     status["stop_requested"] = (folder / "STOP").exists()
-    batch = status.get("batch")
-    if running and isinstance(batch, str) and "/" not in batch and "\\" not in batch:
-        try:
-            with open(RUNS / batch / "results.jsonl", "rb") as rows:
-                status["batch_done"] = sum(1 for _ in rows)
-        except OSError:
-            status["batch_done"] = 0
+    batches = status.get("batches")
+    if running and isinstance(batches, list):
+        status["batch_done"] = 0
+        for batch in batches:
+            if isinstance(batch, str) and NAME.fullmatch(batch):
+                try:
+                    with open(RUNS / batch / "results.jsonl", "rb") as rows:
+                        status["batch_done"] += sum(1 for _ in rows)
+                except OSError:
+                    pass
     return status
 
 

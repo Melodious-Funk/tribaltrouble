@@ -214,11 +214,12 @@ const MORE_SETTINGS = [
   ["self_share", "Share of games against itself", "0.3"],
   ["teacher_share", "Share against the scripted teacher", "0.2"],
   ["stock_share", "Share against a stock AI", "0.2"], ["stock", "The stock AI: easy, normal, hard or auto", "hard"],
-  ["eval_generations", "Measure strength every N generations", "10"], ["eval_games", "Games per opponent when measuring", "20"],
+  ["eval_generations", "Measure strength every N generations", "10"], ["eval_games", "Games per opponent when measuring", "40"],
   ["eval_stock", "Stock AIs measured against (easy, normal, hard)", "hard"],
   ["record_generations", "Keep the games of every Nth generation", "100"],
   ["snapshot_generations", "A net joins the league every N generations", "10"],
-  ["hidden", "Hidden layers (a new run only)", "128,128"], ["workers", "Harness workers", "auto"],
+  ["hidden", "Hidden layers (a new run only)", "256,256,256"], ["workers", "Harness workers", "auto"],
+  ["init_from", "Start by imitating this run's net (a new run only)", ""],
   ["gamma", "Discount per decision", "0.997"], ["gae_lambda", "GAE lambda", "0.95"], ["clip", "PPO clip", "0.2"],
   ["seed", "Seed", "1"],
 ];
@@ -573,12 +574,13 @@ function renderStatus() {
   const detail = el("div", {class: "detail"});
   if (status.running) {
     box.append(el("div", {class: "icon", text: "▶"}));
-    const what = {playing: "playing its games", evaluating: "measuring its strength", learning: "learning from the games"};
+    const what = {playing: "playing its games", evaluating: "measuring its strength", learning: "learning from the games",
+      initializing: "learning to choose as --init-from's net does"};
     let line = `Generation ${status.generation}: ${what[status.phase] || status.phase}`;
     if (status.players) line += ` (${shortLineup(status.players)})`;
     detail.append(line);
     if (status.games && status.batch_done != null && status.phase !== "learning") {
-      detail.append(`: ${Math.min(status.batch_done, status.games)} of ${status.games} games of this batch`);
+      detail.append(`: ${Math.min(status.batch_done, status.games)} of ${status.games} games of these batches`);
       const meter = el("div", {class: "meter"}, el("div"));
       meter.firstChild.style.width = Math.min(100, 100 * status.batch_done / status.games) + "%";
       detail.append(meter);
