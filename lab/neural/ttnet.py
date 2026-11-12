@@ -1,9 +1,11 @@
 """The policy network of the neural AI and its two file formats.
 
-The network here must compute what tt/src/main/java/com/oddlabs/tt/player/neural/Net.java computes: fully connected
-layers with tanh, a policy layer of logits and a value layer. `export` writes the weights as Net.java reads them, and
+The network here must compute what tt/src/main/java/com/oddlabs/tt/player/neural/Net.java and NeuralAI.java compute:
+fully connected layers with tanh, a policy layer of logits and a value layer, and `prior` added to the logit of every
+choice the scripted teacher advises. The advice is the last numbers of the observation, one 1 per head, so adding
+`prior` times that part of the observation is the same sum. `export` writes the weights as Net.java reads them, and
 `read_trajectory` reads what Trajectory.java writes. Sizes (observation, heads) come from the trajectory files, so
-this file knows nothing about what the numbers mean.
+this file knows nothing else about what the numbers mean.
 """
 
 import struct
@@ -15,14 +17,17 @@ from torch import nn
 
 NET_MAGIC = 0x54544E4E  # "TTNN"
 TRAJECTORY_MAGIC = 0x5454544A  # "TTTJ"
-VERSION = 1
+NET_VERSION = 2
+TRAJECTORY_VERSION = 1
 
 
 class Policy(nn.Module):
-    def __init__(self, observation_size: int, head_sizes: list[int], hidden: tuple[int, ...] = (128, 128)):
+    def __init__(self, observation_size: int, head_sizes: list[int], hidden: tuple[int, ...] = (128, 128),
+                 prior: float = 0.0):
         super().__init__()
         self.observation_size = observation_size
         self.head_sizes = list(head_sizes)
+        self.prior = float(prior)
         sizes = [observation_size, *hidden]
         self.hidden = nn.ModuleList(nn.Linear(a, b) for a, b in zip(sizes, sizes[1:]))
         self.policy = nn.Linear(sizes[-1], sum(head_sizes))
@@ -30,7 +35,7 @@ class Policy(nn.Module):
         for layer in self.hidden:
             nn.init.orthogonal_(layer.weight, gain=2 ** 0.5)
             nn.init.zeros_(layer.bias)
-        # near-uniform choices and a zero value at the start
+        # logits near zero and a zero value at the start: the first net chooses as the prior alone does
         nn.init.orthogonal_(self.policy.weight, gain=0.01)
         nn.init.zeros_(self.policy.bias)
         nn.init.orthogonal_(self.value.weight, gain=1.0)
@@ -40,7 +45,10 @@ class Policy(nn.Module):
         x = observation
         for layer in self.hidden:
             x = torch.tanh(layer(x))
-        return self.policy(x), self.value(x).squeeze(-1)
+        logits = self.policy(x)
+        if self.prior != 0.0:
+            logits = logits + self.prior * observation[..., -logits.shape[-1]:]
+        return logits, self.value(x).squeeze(-1)
 
     def evaluate(self, observation, action, allowed):
         """The log probability of `action`, the entropy of the choice, and the value, for each row.
@@ -62,7 +70,8 @@ class Policy(nn.Module):
     def export(self, file: Path) -> None:
         """Writes the weights as Net.java reads them (big-endian), through a temporary file."""
         layers = [*self.hidden, self.policy, self.value]
-        data = bytearray(struct.pack(">iiii", NET_MAGIC, VERSION, self.observation_size, len(self.hidden)))
+        data = bytearray(struct.pack(">iiifi", NET_MAGIC, NET_VERSION, self.observation_size, self.prior,
+                                     len(self.hidden)))
         for layer in layers:
             weight = layer.weight.detach().cpu().numpy()
             data += struct.pack(">ii", weight.shape[1], weight.shape[0])
@@ -80,8 +89,8 @@ def read_trajectory(file: Path) -> dict | None:
     if len(data) < 16:
         return None
     magic, version, observation_size, heads = struct.unpack_from(">iiii", data, 0)
-    if magic != TRAJECTORY_MAGIC or version != VERSION:
-        raise ValueError(f"{file} is not a trajectory file of version {VERSION}")
+    if magic != TRAJECTORY_MAGIC or version != TRAJECTORY_VERSION:
+        raise ValueError(f"{file} is not a trajectory file of version {TRAJECTORY_VERSION}")
     head_sizes = list(struct.unpack_from(f">{heads}i", data, 16))
     outcome_size, slot = struct.unpack_from(">ii", data, 16 + 4 * heads)
     start = 16 + 4 * heads + 8
