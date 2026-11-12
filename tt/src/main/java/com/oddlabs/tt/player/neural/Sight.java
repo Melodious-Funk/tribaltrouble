@@ -1,6 +1,7 @@
 package com.oddlabs.tt.player.neural;
 
 import com.oddlabs.tt.landscape.TreeSupply;
+import com.oddlabs.tt.model.Building;
 import com.oddlabs.tt.model.IronSupply;
 import com.oddlabs.tt.model.LandBuilding;
 import com.oddlabs.tt.model.Race;
@@ -42,6 +43,8 @@ final class Sight {
 
     final @NonNull List<Unit> idle_peons = new ArrayList<>();
     final @NonNull List<Unit> builders = new ArrayList<>();
+    /** What each of {@link #builders} builds or repairs, in the same order. */
+    private final @NonNull List<Building> builder_sites = new ArrayList<>();
     /** Peons outside that are neither idle, building nor gathering: walking somewhere. */
     int busy_peons;
     final int @NonNull [] gatherers = new int[RESOURCES];
@@ -56,8 +59,13 @@ final class Sight {
     final @NonNull List<LandBuilding> quarters = new ArrayList<>();
     final @NonNull List<LandBuilding> armories = new ArrayList<>();
     final @NonNull List<LandBuilding> towers = new ArrayList<>();
+    /** The sites that stand on the map. */
     final @NonNull List<LandBuilding> sites = new ArrayList<>();
-    /** Sites by Race.BUILDING_QUARTERS, _ARMORY and _TOWER. */
+    /**
+     * The sites whose builders still walk to them: the engine puts a site on the map when its first builder arrives.
+     */
+    final @NonNull List<Building> carried = new ArrayList<>();
+    /** Sites, carried ones included, by Race.BUILDING_QUARTERS, _ARMORY and _TOWER. */
     final int @NonNull [] site_kinds = new int[3];
     int in_quarters;
     int in_armories;
@@ -81,6 +89,8 @@ final class Sight {
     int enemy_sites;
     int enemy_kills;
     int enemy_lost;
+    /** The enemies' warriors and chieftains. */
+    final @NonNull List<Unit> enemy_fighters = new ArrayList<>();
     /** The enemies' start, in cells (the nearest one's). */
     int enemy_home_x;
     int enemy_home_y;
@@ -109,6 +119,16 @@ final class Sight {
                 readBuilding(building);
             } else if (s instanceof Unit unit && !unit.isMounted()) {
                 readUnit(race, unit);
+            }
+        }
+        for (Building site : builder_sites) {
+            if (site.isDead() || site.isComplete() || sites.contains(site) || carried.contains(site)) {
+                continue;
+            }
+            int kind = site.getTemplate().getTemplateID();
+            if (kind <= Race.BUILDING_TOWER) {
+                carried.add(site);
+                site_kinds[kind]++;
             }
         }
         LandBuilding centre = !quarters.isEmpty() ? quarters.getFirst() : !armories.isEmpty() ? armories.getFirst() : null;
@@ -163,6 +183,7 @@ final class Sight {
                     } else {
                         enemy_warrior_kinds[kind]++;
                     }
+                    enemy_fighters.add(unit);
                     long distance = squared(unit.getGridX() - home_x, unit.getGridY() - home_y);
                     if (distance <= (long) THREAT_CELLS * THREAT_CELLS) {
                         threats++;
@@ -230,8 +251,12 @@ final class Sight {
                 if (resource >= 0) {
                     gatherers[resource]++;
                 }
-            } else if (doing instanceof PlaceBuildingController || doing instanceof RepairController) {
+            } else if (doing instanceof PlaceBuildingController placing) {
                 builders.add(unit);
+                builder_sites.add(placing.getBuilding());
+            } else if (doing instanceof RepairController repairing) {
+                builders.add(unit);
+                builder_sites.add(repairing.getBuilding());
             } else {
                 busy_peons++;
             }
@@ -277,6 +302,27 @@ final class Sight {
 
     int gathererCount() {
         return gatherers[0] + gatherers[1] + gatherers[2] + gatherers[3];
+    }
+
+    /** All peons, wherever they are: the units that are neither warriors nor the chieftain. */
+    int peons() {
+        return Math.max(0, units - warriors() - garrison - (chieftain != null ? 1 : 0));
+    }
+
+    /** The builders at work on {@code site} or walking to it. */
+    int buildersOf(@NonNull Building site) {
+        int count = 0;
+        for (Building other : builder_sites) {
+            if (other == site) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** The sites in all: on the map and carried. */
+    int siteCount() {
+        return sites.size() + carried.size();
     }
 
     /** Finished buildings and sites of {@code kind} (Race.BUILDING_*). */

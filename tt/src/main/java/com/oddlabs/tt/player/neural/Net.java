@@ -16,30 +16,38 @@ import java.util.Random;
  * machine of a lockstep game must choose the same action from the same observation, so the arithmetic is floats in a
  * fixed order with {@link StrictMath} for tanh and exp: no native library, no vector code, the same bits everywhere.
  *
- * <p>The file, big-endian: the magic and version, the observation size, the number of hidden layers, then each hidden
- * layer, the policy layer (to {@link Heads#LOGITS}) and the value layer (to 1), each as its input and output sizes,
- * its weights row by row and its biases. Hidden layers use tanh.
+ * <p>The file, big-endian: the magic and version, the observation size, the prior (what the logits of the choices
+ * {@link Teacher} advises get added), the number of hidden layers, then each hidden layer, the policy layer (to
+ * {@link Heads#LOGITS}) and the value layer (to 1), each as its input and output sizes, its weights row by row and
+ * its biases. Hidden layers use tanh.
  */
 final class Net {
     private static final int MAGIC = 0x54544E4E; // "TTNN"
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     private final float @NonNull [] @NonNull [] weights;
     private final float @NonNull [] @NonNull [] biases;
     private final int @NonNull [] inputs;
     private final int hidden_layers;
+    private final float prior;
     /** The activations of the last hidden layer after {@link #forward}. */
     private float @NonNull [] features = new float[0];
 
     private Net(float @NonNull [] @NonNull [] weights, float @NonNull [] @NonNull [] biases, int @NonNull [] inputs,
-            int hidden_layers) {
+            int hidden_layers, float prior) {
         this.weights = weights;
         this.biases = biases;
         this.inputs = inputs;
         this.hidden_layers = hidden_layers;
+        this.prior = prior;
     }
 
-    /** The net of {@code file}; null without a file: the policy then chooses uniformly at random. */
+    /** What the net was trained with as the weight of the teacher's advice. */
+    float prior() {
+        return prior;
+    }
+
+    /** The net of {@code file}; null without a file: the policy is then the teacher's advice and nothing else. */
     static @Nullable Net load(@Nullable Path file, int observation_size) {
         if (file == null) {
             return null;
@@ -53,6 +61,7 @@ final class Net {
                 throw new IllegalArgumentException(
                         file + " takes " + observation + " observations, this build makes " + observation_size + ": train a net for this build");
             }
+            float prior = in.readFloat();
             int hidden = in.readInt();
             int layers = hidden + 2;
             float[][] weights = new float[layers][];
@@ -74,7 +83,7 @@ final class Net {
                 throw new IllegalArgumentException(
                         file + " has " + biases[hidden].length + " logits, this build " + Heads.LOGITS + ": train a net for this build");
             }
-            return new Net(weights, biases, inputs, hidden);
+            return new Net(weights, biases, inputs, hidden, prior);
         } catch (IOException e) {
             throw new UncheckedIOException("cannot read the net " + file, e);
         }
