@@ -42,7 +42,7 @@ The heads (since 2026-11-12; `Heads.java`):
 
 | head | choices | chooses every |
 |---|---|---|
-| build | nothing / quarters / armory / tower (up to 8 quarters, 1 armory, 8 towers, 2 sites at a time) | 5 s |
+| build | nothing / quarters / armory / tower (up to 3 quarters, 1 armory, 8 towers, 2 sites at a time) | 5 s |
 | peons kept in each quarters | 1 / 4 / 10 / 18 / 30; the rest walk to the armory | 15 s |
 | peons kept at the forge | 2 / 6 / 12 / 20 / 32; the rest of the armory gathers or takes arms | 15 s |
 | wood, rock, iron, rubber gatherers | one head each: 2 fewer / same / 2 more, moving a target that starts at 10/0/8/0 | 10 s |
@@ -71,8 +71,8 @@ Without a net (`neural:greedy=1`) the AI is the teacher alone.
 
 The teacher's plan, measured against Hard on seeds 1..20, both starts (40 games, 30-minute limit; `t_...` params):
 
-- the quarters first with all 20 starting peons, then the armory with all of them; 2 quarters, 2 towers, up to 6
-  quarters; 1 peon kept in each quarters (breeding goes with the cube root of the peons inside, so many emptier
+- the quarters first with all 20 starting peons, then the armory with all of them; 2 quarters, 2 towers, then the
+  third and last quarters (3 at most since 2026-11-12; up to 6 in the results below); 1 peon kept in each quarters (breeding goes with the cube root of the peons inside, so many emptier
   quarters breed faster); the forge crew at 30% of the peons outside the quarters;
 - gatherers: 10 wood and 8 iron, then 3 rock and 8 rubber from 2 minutes before rubber weapons; more of a resource
   while its armory stock is short (wood below 12, ore below 5), fewer while it piles up (wood above 60, ore above 30);
@@ -97,7 +97,11 @@ mostly by a wave at 6-8 minutes against a base still building its third quarters
   fight pays), `--raze-reward` 0.05 per enemy building, `--razed-penalty` 0.03 per building lost.
 - The shaped strength margin stays at a smaller weight (`--shaping` 0.2); it sums to nothing over a game.
 - Opponents: itself 30%, the teacher 20%, Hard 20% (`--stock`), earlier nets the rest. Evaluation every 10th
-  generation adds the teacher to easy, normal and hard: above 0.5 there, training has found something better.
+  generation plays the teacher and the stock AIs of `--eval-stock` (Hard alone by default), with the training time
+  limit: above 0.5 against the teacher, training has found something better.
+- `teacher1` (from 2026-11-12) ran generations 0-21 with 120 games of 30 minutes and up to 6 quarters, then on with
+  50 games of 20 minutes, 3 quarters at most, and Hard alone in training and evaluation. Its teacher under those
+  limits: 15 of 20 against Hard (2 draws).
 - The log line adds `follows` (per head, how often the advice was taken), `result_mean`, `damage_mean` and `decided`
   (the share of games won or lost before the limit); the dashboard charts them, and takes the head names from
   `args.json`.
