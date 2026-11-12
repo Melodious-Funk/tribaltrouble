@@ -110,6 +110,8 @@ def parse_args():
     p.add_argument("--stock-share", type=float, default=0.2, help="share played against a stock AI")
     p.add_argument("--stock", default="hard", choices=[*STOCK, "auto"],
                    help="the stock AI of the training games; auto: the easiest one not yet beaten 9 times in 10")
+    p.add_argument("--eval-stock", default="hard",
+                   help="the stock AIs an evaluation plays, comma-separated (easy, normal, hard), besides the teacher")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=1)
     return p.parse_args()
@@ -360,14 +362,16 @@ class Trainer:
         return stats
 
     def evaluate(self) -> tuple[dict, dict]:
-        """The current net, choosing greedily, against each stock AI and the teacher on maps training never plays."""
+        """The current net, choosing greedily, against the stock AIs of --eval-stock and the teacher, on maps training
+        never plays, with the time limit of the training games."""
         scores = {}
         results = {}
         maps = max(1, self.args.eval_games // 2)
-        for name in [*STOCK, "teacher"]:
+        stock = [name for name in self.args.eval_stock.split(",") if name]
+        for name in [*stock, "teacher"]:
             opponent = "neural:greedy=1" if name == "teacher" else name
             players = f"{self.spec(self.generation, None, 0, greedy=True)} vs {opponent}"
-            rows = self.batch(f"{self.args.run}-eval-{name}", players, EVAL_SEED, maps, False, 40)
+            rows = self.batch(f"{self.args.run}-eval-{name}", players, EVAL_SEED, maps, False, self.args.minutes)
             counted = [row for row in rows if row.get("result") is not None]
             scores[name] = round(sum(row["score"] for row in counted) / max(1, len(counted)), 3)
             results[name] = self.tally(counted)
@@ -463,6 +467,9 @@ def main():
     np.random.seed(args.seed)
     if not math.isfinite(args.lr) or args.lr <= 0:
         sys.exit("--lr must be positive")
+    unknown = [name for name in args.eval_stock.split(",") if name and name not in STOCK]
+    if unknown:
+        sys.exit(f"--eval-stock: no stock AI {', '.join(unknown)} (easy, normal, hard)")
     def interrupt(*_):
         raise KeyboardInterrupt  # as Ctrl+C: the batch it waits for is ended too
 
