@@ -50,7 +50,8 @@ SETTINGS = {
     "seed": (int, 0, 2 ** 31 - 1),
 }
 TEXT_SETTINGS = {"hidden": re.compile(r"\d{1,5}(,\d{1,5}){0,7}"), "workers": re.compile(r"auto|\d{1,3}"),
-                 "stock": re.compile(r"easy|normal|hard|auto")}
+                 "stock": re.compile(r"easy|normal|hard|auto"),
+                 "eval_stock": re.compile(r"(easy|normal|hard)(,(easy|normal|hard)){0,2}")}
 FILTERS = ("all", "timeout", "decided")
 
 
