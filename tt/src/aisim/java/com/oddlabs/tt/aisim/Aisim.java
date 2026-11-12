@@ -80,7 +80,8 @@ public final class Aisim {
                                                  AI logs of every game (lost: of the games team A did not win);
                                                  --profile records where the CPU goes, for profile;
                                                  --record-every N writes the game file of every Nth game only
-              serve   [WORKERS]                  batch requests from stdin, one JSON line each ({"id": ID, "args": [batch
+              serve   [WORKERS] [--games-per-worker N]
+                                                 batch requests from stdin, one JSON line each ({"id": ID, "args": [batch
                                                  options]}), on one pool of workers that outlives them; answers each
                                                  with an @@ line on stdout once its run is played (docs/aisim.md)
               summary RUN                        results of a (running) run
@@ -304,14 +305,16 @@ public final class Aisim {
     }
 
     /**
-     * serve [WORKERS] [--stale-ok]: batch requests from stdin, on one pool of workers ({@link Serve}). A request takes
+     * serve [WORKERS] [--games-per-worker N] [--stale-ok]: batch requests from stdin, on one pool of workers
+     * ({@link Serve}). A request takes
      * batch's options but the workers', --profile and --stale-ok, which belong to the pool.
      */
     private static int serve(@NonNull Options options) throws IOException {
-        options.check(Set.of("workers", "cpus", "memory", "stale-ok"), 0);
+        options.check(Set.of("workers", "cpus", "memory", "games-per-worker", "stale-ok"), 0);
         Snapshot.requireFresh(options.flag("stale-ok"));
         Pace.Limits limits = Pace.Limits.parse(options.get("workers"), options.get("cpus"), options.get("memory"));
-        return Serve.run(limits, args -> {
+        int games_per_worker = options.integer("games-per-worker", Serve.GAMES_PER_WORKER, 1, MAX_RECORD_EVERY);
+        return Serve.run(limits, games_per_worker, args -> {
             Options request = new Options(args, 0);
             for (String pool : List.of("workers", "cpus", "memory", "profile", "stale-ok")) {
                 if (request.get(pool) != null) {

@@ -152,7 +152,8 @@ and overlap: their games share one queue, in the order the requests came. Once a
 answers on stdout with one line, `@@{"id": "1", "run": "g1-self", "games": 20, "failed": 0, "status": 0}` (status is
 the summary's exit code), or `@@{"id": "1", "error": "..."}` for a request it could not start. Everything else,
 the summaries among it, goes to stderr. At the end of stdin it plays what is queued and exits; Ctrl+C or SIGTERM ends
-it and its workers at once. Workers log to `aisim/serve/PID/`, which is deleted at the end unless a game failed.
+it and its workers at once. A worker plays `--games-per-worker` games (1000 by default, ten times a batch's 100)
+before a fresh one takes its place. Workers log to `aisim/serve/PID/`, which is deleted at the end unless a game failed.
 `lab/neural/train.py` on the `neural` branch is a client.
 
 To take less, or a fixed amount:
@@ -572,7 +573,7 @@ The same list as `./aisim.sh help`:
 ./aisim.sh play    [--players "P.. vs P.."] [--seed N|random] [--side S] [--name NAME] [--profile] [MAP] [GAME]
 ./aisim.sh batch   --players "P.. vs P.." [--seeds LIST] [--side S] [--logs [lost]] [--name NAME] [--profile]
                    [--record-every N] [WORKERS] [MAP] [GAME]
-./aisim.sh serve   [WORKERS]
+./aisim.sh serve   [WORKERS] [--games-per-worker N]
 ./aisim.sh summary RUN
 ./aisim.sh compare BASE VARIANT [VARIANT...] [--force]
 ./aisim.sh show    RUN KEY | FILE.jsonl

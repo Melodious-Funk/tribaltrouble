@@ -66,6 +66,11 @@ public final class Serve {
     private record Entry(@NonNull Request request, @NonNull Job job, @NonNull String heap) {
     }
 
+    /**
+     * Games a worker plays before a fresh one takes its place, by default: ten times a batch's, since serve exists to
+     * keep workers warm; {@code --games-per-worker} sets it.
+     */
+    public static final int GAMES_PER_WORKER = 10 * Batch.GAMES_PER_WORKER;
     /** How long a driver waits for a game before it looks at its pace again. */
     private static final long POLL_MILLIS = 500;
 
@@ -76,14 +81,16 @@ public final class Serve {
     private final @NonNull List<WorkerProcess> live = new ArrayList<>();
     private final @NonNull Pace pace;
     private final Pace.@NonNull Limits limits;
+    private final int games_per_worker;
     private volatile boolean input_done;
     private volatile boolean stopped;
     /** Whether a game failed, which keeps the worker logs. */
     private volatile boolean any_failed;
 
-    private Serve(@NonNull PrintStream protocol, Pace.@NonNull Limits limits) throws IOException {
+    private Serve(@NonNull PrintStream protocol, Pace.@NonNull Limits limits, int games_per_worker) throws IOException {
         this.protocol = protocol;
         this.limits = limits;
+        this.games_per_worker = games_per_worker;
         this.snap = Snapshot.latest();
         this.dir = Aisim.ROOT.resolve("serve").resolve(String.valueOf(ProcessHandle.current().pid()));
         Files.createDirectories(dir);
@@ -95,11 +102,11 @@ public final class Serve {
      * Serves requests until the end of stdin; {@code prepare} turns a request's batch options into its run, as batch
      * does, or throws a {@link UsageException}.
      */
-    public static int run(Pace.@NonNull Limits limits,
+    public static int run(Pace.@NonNull Limits limits, int games_per_worker,
             @NonNull Function<String[], Aisim.BatchRun> prepare) throws IOException {
         PrintStream protocol = System.out;
         System.setOut(System.err); // only answers go to stdout
-        Serve serve = new Serve(protocol, limits);
+        Serve serve = new Serve(protocol, limits, games_per_worker);
         return serve.serve(prepare);
     }
 
@@ -230,7 +237,7 @@ public final class Serve {
                 }
                 record(entry, row);
                 worker.games++;
-                if (!End.endedNormally(row) || worker.games >= Batch.GAMES_PER_WORKER) {
+                if (!End.endedNormally(row) || worker.games >= games_per_worker) {
                     worker.close();
                     worker = null;
                 }
