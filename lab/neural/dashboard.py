@@ -42,12 +42,15 @@ SETTINGS = {
     "generations": (int, 1, 1_000_000), "games": (int, 2, 100_000), "minutes": (int, 1, 600),
     "lr": (float, 1e-7, 1.0), "epochs": (int, 1, 100), "minibatch": (int, 16, 1_000_000),
     "entropy": (float, 0.0, 1.0), "shaping": (float, 0.0, 10.0), "self_share": (float, 0.0, 1.0),
-    "stock_share": (float, 0.0, 1.0), "gamma": (float, 0.5, 1.0), "gae_lambda": (float, 0.0, 1.0),
+    "stock_share": (float, 0.0, 1.0), "teacher_share": (float, 0.0, 1.0), "prior": (float, 0.0, 20.0),
+    "timeout_result": (float, -2.0, 1.0), "win_speed": (float, 0.0, 5.0), "kill_reward": (float, 0.0, 1.0),
+    "loss_penalty": (float, 0.0, 1.0), "raze_reward": (float, 0.0, 5.0), "razed_penalty": (float, 0.0, 5.0), "gamma": (float, 0.5, 1.0), "gae_lambda": (float, 0.0, 1.0),
     "clip": (float, 0.01, 1.0), "eval_generations": (int, 0, 1_000_000), "eval_games": (int, 2, 1000),
     "record_generations": (int, 0, 1_000_000), "snapshot_generations": (int, 0, 1_000_000),
     "seed": (int, 0, 2 ** 31 - 1),
 }
-TEXT_SETTINGS = {"hidden": re.compile(r"\d{1,5}(,\d{1,5}){0,7}"), "workers": re.compile(r"auto|\d{1,3}")}
+TEXT_SETTINGS = {"hidden": re.compile(r"\d{1,5}(,\d{1,5}){0,7}"), "workers": re.compile(r"auto|\d{1,3}"),
+                 "stock": re.compile(r"easy|normal|hard|auto")}
 FILTERS = ("all", "timeout", "decided")
 
 

@@ -175,8 +175,8 @@
 </main>
 <script>
 "use strict";
-// The choices of the policy's heads, as tt/src/main/java/com/oddlabs/tt/player/neural/Heads.java has them.
-const HEADS = [
+// The choices of the policy's heads in runs from before the trainer wrote them into args.json (2026-11-12).
+const OLD_HEADS = [
   {name: "Build next", options: ["nothing", "quarters", "armory", "tower"]},
   {name: "Gatherers on wood / rock / iron / rubber", options: ["5/3/2/0", "5/1/4/0", "7/2/1/0", "4/0/6/0", "4/1/3/2"]},
   {name: "Share of peons that gather", options: ["10%", "20%", "30%", "45%", "60%"], ordinal: true},
@@ -186,18 +186,34 @@ const HEADS = [
   {name: "What the army does", options: ["defend", "attack", "retreat"]},
   {name: "Chieftain", options: ["none", "train one"]},
 ];
+/** The heads of the selected run: the trainer's own list, else the old one. Choices that are all numbers are a scale. */
+function heads() {
+  const own = view.args?.heads;
+  if (!Array.isArray(own)) return OLD_HEADS;
+  return own.map(head => ({name: head.name, options: head.choices,
+    ordinal: head.choices.every(choice => /^\d+%?$/.test(choice))}));
+}
 const STOCK = ["easy", "normal", "hard"];
-// colour follows the opponent in every chart
+// colour follows the opponent in every chart; the teacher is the scripted plan the net starts from
 const OPPONENT_COLOR = {easy: "var(--series-1)", normal: "var(--series-2)", hard: "var(--series-3)",
-  "earlier nets": "var(--series-4)", "self-play": "var(--series-5)"};
+  "earlier nets": "var(--series-4)", teacher: "var(--series-5)", "self-play": "var(--neutral)"};
 // What the page sends back to start or stop anything: the server gives it only to its own page.
 const TOKEN = "__DASHBOARD_TOKEN__";
 // train.py's other settings: [option, label, its default there]
 const MORE_SETTINGS = [
   ["minutes", "Time limit of a game, game minutes", "30"], ["lr", "Learning rate", "0.0003"],
   ["epochs", "Passes over a generation's decisions", "4"], ["minibatch", "Decisions per update", "1024"],
-  ["entropy", "Entropy bonus", "0.01"], ["shaping", "Weight of the shaped reward", "0.5"],
-  ["self_share", "Share of games against itself", "0.4"], ["stock_share", "Share against the stock AIs", "0.2"],
+  ["entropy", "Entropy bonus", "0.003"],
+  ["prior", "Weight of the teacher's advice (a new run only; 0: none)", "4.5"],
+  ["timeout_result", "What a game at the time limit counts as (loss -1, win 1)", "-1"],
+  ["win_speed", "Bonus for a win at the first second", "0.5"],
+  ["kill_reward", "Reward per enemy unit killed", "0.002"], ["loss_penalty", "Penalty per unit lost", "0.001"],
+  ["raze_reward", "Reward per enemy building destroyed", "0.05"],
+  ["razed_penalty", "Penalty per building lost", "0.03"],
+  ["shaping", "Weight of the shaped reward", "0.2"],
+  ["self_share", "Share of games against itself", "0.3"],
+  ["teacher_share", "Share against the scripted teacher", "0.2"],
+  ["stock_share", "Share against a stock AI", "0.2"], ["stock", "The stock AI: easy, normal, hard or auto", "hard"],
   ["eval_generations", "Measure strength every N generations", "10"], ["eval_games", "Games per stock AI when measuring", "20"],
   ["record_generations", "Keep the games of every Nth generation", "100"],
   ["snapshot_generations", "A net joins the league every N generations", "10"],
@@ -205,8 +221,8 @@ const MORE_SETTINGS = [
   ["gamma", "Discount per decision", "0.997"], ["gae_lambda", "GAE lambda", "0.95"], ["clip", "PPO clip", "0.2"],
   ["seed", "Seed", "1"],
 ];
-// what the form starts with where the selected run has no settings of its own: what the first trials learned with
-const START_WITH = {lr: "0.001", epochs: "6", minibatch: "512"};
+// what the form starts with where the selected run has no settings of its own, where that is not train.py's default
+const START_WITH = {};
 const SVG = "http://www.w3.org/2000/svg";
 const view = {run: null, log: [], status: null, args: null, kept: [], nets: 0, root: "", range: 0, smooth: 1,
   tables: new Set(), drawn: "", training: null, training_stop: false, filled: undefined,
@@ -610,11 +626,12 @@ function renderTiles() {
   const evals = log.filter(line => line.eval);
   if (evals.length > 0) {
     const first = evals[0], latest = evals[evals.length - 1];
-    for (const name of STOCK) {
+    for (const name of [...STOCK, "teacher"]) {
       if (latest.eval[name] == null) continue;
       const since = latest === first ? null : deltaLine(latest.eval[name] - (first.eval[name] ?? 0),
         "since generation " + first.generation);
-      box.append(tile(`Score against ${name}, generation ${latest.generation}`, number(latest.eval[name], 2), since));
+      box.append(tile(`Score against ${name === "teacher" ? "its teacher" : name}, generation ${latest.generation}`,
+        number(latest.eval[name], 2), since));
     }
   }
   box.append(tile("Player-games learned from", compact(log.reduce((sum, line) => sum + (line.games || 0), 0))));
@@ -654,15 +671,16 @@ function renderCharts() {
 
   cards.push(...section(parent, "Strength", "Score is wins plus half the draws, per game: 1 wins every game, 0.5 is "
     + "level (or every game a draw at the time limit), 0 loses every game.", "wide", [
-    lineChart("eval", {title: "Measured strength against the stock AIs",
+    lineChart("eval", {title: "Measured strength against the stock AIs and its teacher",
       note: "The net taking its most likely choice, on maps training never plays"
-        + (per_eval ? `; ${per_eval} games a point.` : "."), min: 0, max: 1,
-      series: STOCK.map(name => ({name, color: OPPONENT_COLOR[name],
+        + (per_eval ? `; ${per_eval} games a point.` : ".") + " The teacher is the scripted plan the net starts "
+        + "from: above 0.5 there, training has found something better.", min: 0, max: 1,
+      series: [...STOCK, "teacher"].map(name => ({name, color: OPPONENT_COLOR[name],
         points: points(log, line => line.eval ? line.eval[name] : null)}))}),
     lineChart("scores", {title: "Score in its training games, by opponent",
       note: "The net sampling its choices, as it does to explore. Against itself the score is 0.5 by construction."
         + averaged, min: 0, max: 1,
-      series: [...STOCK, "earlier nets"].map(name => ({name, color: OPPONENT_COLOR[name],
+      series: [...STOCK, "earlier nets", "teacher"].map(name => ({name, color: OPPONENT_COLOR[name],
         points: smoothed(points(log, line => {
           if (!line.scores) return null;
           if (name !== "earlier nets") return line.scores[name];
@@ -678,8 +696,11 @@ function renderCharts() {
     return games ? tallies.reduce((sum, t) => sum + t[field], 0) / games : null;
   };
   const not_logged = "Not in this run's log: the trainer writes it from this version on.";
-  cards.push(...section(parent, "How its games end", "A game nobody wins within the time limit is a draw and "
-    + "teaches little: the shaped reward does the teaching until games are decided.", "wide", [
+  const limit_counts = view.args?.timeout_result;
+  cards.push(...section(parent, "How its games end", limit_counts == null ? "A game nobody wins within the time "
+    + "limit is a draw and teaches little: the shaped reward does the teaching until games are decided."
+    : "A game nobody wins within the time limit is a draw in these counts; in training it counts as "
+    + limit_counts + " for both sides (a loss is -1).", "wide", [
     stackChart("outcomes", {title: "Results against other opponents",
       note: "Games against the stock AIs and earlier nets, as shares of each bar's games.", empty: not_logged,
       parts: [{name: "won", color: "var(--good)"}, {name: "drew", color: "var(--neutral)"},
@@ -711,16 +732,38 @@ function renderCharts() {
 
   const chosen = log.filter(line => line.choices);
   cards.push(...section(parent, "What the policy chooses", "How often each choice was taken, of all decisions of a "
-    + "generation (one every 5 game seconds). A net of random weights takes each allowed choice equally often."
-    + averaged, "small", HEADS.map((head, h) => lineChart("head" + h, {title: head.name, min: 0,
+    + "generation (one every 5 game seconds; most heads choose anew less often and keep their choice in between)."
+    + averaged, "small", heads().map((head, h) => lineChart("head" + h, {title: head.name, min: 0,
       format: v => Math.round(v * 100) + "%", height: 190, empty: not_logged,
       series: head.options.map((option, i) => ({name: option,
         color: head.ordinal ? `var(--ord-${1 + Math.round(i * 4 / (head.options.length - 1))})` : `var(--series-${i + 1})`,
         points: smoothed(points(chosen, line => line.choices[h] ? line.choices[h][i] : null), k)}))}))));
 
+  const taught = log.filter(line => line.follows);
+  if (taught.length > 0) {
+    const mean = list => list.reduce((a, b) => a + b, 0) / list.length;
+    cards.push(...section(parent, "Its teacher and its reward", "The net starts from a scripted plan: the teacher's "
+      + "advice is added to its choices with a weight of " + (view.args?.prior ?? "?") + ", and training moves away "
+      + "from it where that pays." + averaged, "wide", [
+      lineChart("follows", {title: "Decisions that take the teacher's advice", min: 0, max: 1,
+        note: "Mean over the heads, and the head that follows it least.", format: v => Math.round(v * 100) + "%",
+        series: [{name: "mean of the heads", color: "var(--series-1)",
+            points: smoothed(points(taught, line => mean(line.follows)), k)},
+          {name: "the least obedient head", color: "var(--series-2)",
+            points: smoothed(points(taught, line => Math.min(...line.follows)), k)}]}),
+      lineChart("reward", {title: "Reward per game", decimals: 2,
+        note: "What its games counted as (a win 1 plus the bonus for speed, a loss or the time limit -1), and the "
+          + "reward for damage done less damage taken.",
+        series: [{name: "result", color: "var(--series-1)", points: smoothed(points(taught, line => line.result_mean), k)},
+          {name: "damage", color: "var(--series-2)", points: smoothed(points(taught, line => line.damage_mean), k)}]}),
+      one("decided", "Share of its games that were decided", "Won or lost before the time limit." + averaged,
+        line => line.decided, {format: v => Math.round(v * 100) + "%", min: 0, max: 1, height: 230}),
+    ]));
+  }
+
   cards.push(...section(parent, "Learning signals", "PPO's own numbers for each update." + averaged, "small", [
-    one("entropy", "Entropy of the choices", "Summed over the 8 heads; about 9.1 for a net that chooses at random, "
-      + "falling as it makes up its mind.", line => line.entropy, {decimals: 2}),
+    one("entropy", "Entropy of the choices", "Summed over the heads: high for a net that chooses at random, low "
+      + "for one that has made up its mind or follows its teacher.", line => line.entropy, {decimals: 2}),
     one("kl", "Change of the policy per update (KL)", "Above about 0.03 the steps are large: lower --lr.",
       line => line.kl, {decimals: 3}),
     one("clipped", "Share of decisions PPO clipped", null, line => line.clipped,
