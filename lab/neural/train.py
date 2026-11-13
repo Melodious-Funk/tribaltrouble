@@ -46,7 +46,9 @@ from ttnet import Policy, read_trajectory  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 MAP = ["--size", "medium", "--terrain", "tropical", "--hills", "0", "--trees", "10", "--supplies", "10"]
-STOCK = ["easy", "normal", "hard"]
+# The stock opponents by name, and the --players of their team: hard2 is two allied Hard AIs (1 vs 2).
+STOCK = {"easy": "easy", "normal": "normal", "hard": "hard", "hard2": "hard*2"}
+AUTO_LADDER = ["easy", "normal", "hard"]
 # Training maps are seeds 0..TRAIN_SEEDS-1; evaluation uses the seeds from EVAL_SEED on, which training never plays.
 TRAIN_SEEDS = 38000
 EVAL_SEED = 39000
@@ -76,7 +78,8 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--run", required=True, help="the training run's name: its folder is aisim/neural/RUN")
     p.add_argument("--generations", type=int, default=100, help="generations to play in this session")
-    p.add_argument("--games", type=int, default=120, help="games per generation (two per map: both starts)")
+    p.add_argument("--games", type=int, default=120,
+                   help="games per generation (a map is a game per start: two, three against hard2)")
     p.add_argument("--minutes", type=int, default=30, help="the time limit of a training game, in game minutes")
     p.add_argument("--workers", default="auto", help="serve's --workers: the pool of worker JVMs")
     p.add_argument("--java-opts", default="", help="extra JVM options of the workers (AISIM_JAVA_OPTS)")
@@ -123,13 +126,23 @@ def parse_args():
     p.add_argument("--teacher-share", type=float, default=0.2,
                    help="share played against the scripted teacher alone (the plan the net starts from)")
     p.add_argument("--stock-share", type=float, default=0.2, help="share played against a stock AI")
-    p.add_argument("--stock", default="hard", choices=[*STOCK, "auto"],
-                   help="the stock AI of the training games; auto: the easiest one not yet beaten 9 times in 10")
+    p.add_argument("--stock", default="hard",
+                   help="the stock AI of the training games (easy, normal, hard, hard2: two allied Hards), or a "
+                        "ladder of them, comma-separated: the first whose running score is below --ladder-score; "
+                        "auto: easy,normal,hard")
+    p.add_argument("--ladder-score", type=float, default=0.9,
+                   help="the running score (wins 1, draws 0.5) against a stock AI of the ladder that moves on")
     p.add_argument("--eval-stock", default="hard",
-                   help="the stock AIs an evaluation plays, comma-separated (easy, normal, hard), besides the teacher")
+                   help="the stock AIs an evaluation plays, comma-separated (easy, normal, hard, hard2), besides the "
+                        "teacher")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=1)
     return p.parse_args()
+
+
+def seats(players: str) -> int:
+    """The number of players of a --players text: a map is as many games."""
+    return sum(int(token.split("*")[1]) if "*" in token else 1 for token in players.split() if token != "vs")
 
 
 def read_maps(file: Path) -> tuple[list[int], list[int]]:
@@ -223,7 +236,7 @@ class Trainer:
             self.optimizer.load_state_dict(state["optimizer"])
             self.generation = state["generation"]
             self.league = state["league"]
-            self.stock_score = state["stock_score"]
+            self.stock_score = {**self.stock_score, **state["stock_score"]}
             self.random.setstate(state["random"])
             print(f"resuming {args.run} at generation {self.generation}")
         self.train_maps, self.eval_maps = read_maps(args.maps)
@@ -258,7 +271,7 @@ class Trainer:
         return "neural:" + ",".join(params)
 
     def batches(self, batches: list[tuple[str, str, list[int]]], record: bool, minutes: int) -> dict[str, list[dict]]:
-        """Plays the batches (name, --players, maps) at once, each map from both starts; returns their result rows."""
+        """Plays the batches (name, --players, maps) at once, each map from every start; returns their result rows."""
         requests = []
         for name, players, seeds in batches:
             shutil.rmtree(ROOT / "aisim" / "runs" / name, ignore_errors=True)
@@ -267,7 +280,7 @@ class Trainer:
                                     "--record-every", "1" if record else "1000000", *MAP]))
         evaluating = any("-eval-" in name for name, _, _ in batches)
         self.status("evaluating" if evaluating else "playing", batches=[name for name, _, _ in batches],
-                    games=sum(2 * len(seeds) for _, _, seeds in batches), players=batches[0][1])
+                    games=sum(seats(players) * len(seeds) for _, players, seeds in batches), players=batches[0][1])
         self.harness.play(requests)
         rows = {}
         for name, _, _ in batches:
@@ -303,11 +316,10 @@ class Trainer:
             # no net and the most likely choice: the teacher's advice and nothing else
             lineups.append(("teacher", f"{me} vs neural:greedy=1", teacher_maps))
         if stock_maps > 0:
-            stock = self.args.stock
-            if stock == "auto":
-                open_stock = [name for name in STOCK if self.stock_score[name] < 0.9]
-                stock = open_stock[0] if open_stock else STOCK[-1]
-            lineups.append((stock, f"{me} vs {stock}", stock_maps))
+            ladder = AUTO_LADDER if self.args.stock == "auto" else self.args.stock.split(",")
+            open_stock = [name for name in ladder if self.stock_score.get(name, 0.0) < self.args.ladder_score]
+            stock = open_stock[0] if open_stock else ladder[-1]
+            lineups.append((stock, f"{me} vs {STOCK[stock]}", stock_maps))
         if past_maps > 0:
             # earlier nets it still loses to are met more often
             weights = [(1 - entry["wins"] / max(1, entry["games"])) ** 2 + 0.05 for entry in self.league]
@@ -468,8 +480,8 @@ class Trainer:
         seeds = self.eval_maps[:maps] if self.eval_maps else list(range(EVAL_SEED, EVAL_SEED + maps))
         stock = [name for name in self.args.eval_stock.split(",") if name]
         me = self.spec(self.generation, None, 0, greedy=True)
-        batches = [(f"{self.args.run}-eval-{name}", f"{me} vs {'neural:greedy=1' if name == 'teacher' else name}",
-                    seeds) for name in [*stock, "teacher"]]
+        batches = [(f"{self.args.run}-eval-{name}", f"{me} vs {STOCK.get(name, 'neural:greedy=1')}", seeds)
+                   for name in [*stock, "teacher"]]
         played = self.batches(batches, False, self.args.minutes)
         for name in [*stock, "teacher"]:
             rows = played[f"{self.args.run}-eval-{name}"]
@@ -642,9 +654,12 @@ def main():
     np.random.seed(args.seed)
     if not math.isfinite(args.lr) or args.lr <= 0:
         sys.exit("--lr must be positive")
-    unknown = [name for name in args.eval_stock.split(",") if name and name not in STOCK]
-    if unknown:
-        sys.exit(f"--eval-stock: no stock AI {', '.join(unknown)} (easy, normal, hard)")
+    for option, names in (("--eval-stock", args.eval_stock), ("--stock", "" if args.stock == "auto" else args.stock)):
+        unknown = [name for name in names.split(",") if name and name not in STOCK]
+        if unknown:
+            sys.exit(f"{option}: no stock AI {', '.join(unknown)} ({', '.join(STOCK)})")
+    if not args.stock:
+        sys.exit("--stock: name a stock AI, a ladder of them or auto")
     def interrupt(*_):
         raise KeyboardInterrupt  # as Ctrl+C: the batch it waits for is ended too
 
