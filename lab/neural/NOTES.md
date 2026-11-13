@@ -100,7 +100,7 @@ mostly by a wave at 6-8 minutes against a base still building its third quarters
 - Damage pays on the way: `--kill-reward` 0.002 per enemy unit killed, `--loss-penalty` 0.001 per unit lost (an even
   fight pays), `--raze-reward` 0.05 per enemy building, `--razed-penalty` 0.03 per building lost.
 - The shaped strength margin stays at a smaller weight (`--shaping` 0.2); it sums to nothing over a game.
-- Opponents: itself 30%, the teacher 20%, Hard 20% (`--stock`), earlier nets the rest. Evaluation every 10th
+- Opponents: itself 30%, the teacher 20%, Hard 20% (`--stock`, or a ladder of stock AIs), earlier nets the rest. Evaluation every 10th
   generation plays the teacher and the stock AIs of `--eval-stock` (Hard alone by default), with the training time
   limit: above 0.5 against the teacher, training has found something better.
 - `teacher1` (from 2026-11-12) ran generations 0-21 with 120 games of 30 minutes and up to 6 quarters, then on with
@@ -156,6 +156,19 @@ pool's evaluation maps: Hard 39-1 of 40, the teacher 24-2 with 14 draws (0.775);
 seeds 39000+ were 0.975 and 0.70. Only generation 0 has been played: go on with
 `train.py --run big1 --games 50 --minutes 20 --generations N`.
 
+## One against two Hards (2026-11-12)
+
+`--stock` takes a ladder: `--stock hard,hard2` plays Hard until the running score against it (an average over
+generations, 0.7 old and 0.3 new, of the training games: the net sampling its choices) reaches `--ladder-score`
+(0.9), then `hard2`, two allied Hard AIs (`--players "NET vs hard*2"`, three games a map: one per start). The
+running scores are in the checkpoint, so a resumed run keeps its rung. `--eval-stock hard,hard2` measures both.
+`auto` is the old ladder `easy,normal,hard`. The observation needs no change for it: `Sight` sums the enemies'
+numbers and keeps the nearest one's start. The pool's maps are 1 vs 1 maps: with three players the same seed is
+another map, not checked for fairness (a 1 vs 2 is not fair anyway).
+
+`big512` (2026-11-12, 512x512x512) started from big1 (`--init-from big1`) with `--games 50 --minutes 20 --stock
+hard,hard2 --eval-stock hard,hard2 --generations 2000`.
+
 ## How to run
 
 ```bash
@@ -163,6 +176,8 @@ export AISIM_JDK=~/.gradle/jdks/eclipse_adoptium-26-amd64-linux.2     # this lap
 ./aisim.sh build
 python -m venv aisim/venv && aisim/venv/bin/pip install torch numpy  # once; a CUDA build of torch on the GPU machine
 aisim/venv/bin/python lab/neural/train.py --run big1 --init-from teacher1 --games 50 --minutes 20 --generations 1000
+aisim/venv/bin/python lab/neural/train.py --run big512 --hidden 512,512,512 --init-from big1 --games 50 --minutes 20 \
+    --stock hard,hard2 --eval-stock hard,hard2 --generations 2000   # Hard, then 1 vs 2 Hards once it wins 9 in 10
 ./aisim.sh batch --players "neural:net=aisim/neural/big1/nets/g000100.bin,greedy=1 vs hard" \
     --seeds "$(python3 -c "import json; print(','.join(map(str, json.load(open('lab/neural/maps.json'))['eval'])))")" \
     --size medium --terrain tropical --hills 0 --trees 10 --supplies 10
